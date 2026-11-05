@@ -148,9 +148,9 @@ class SeniorService:
             pos_btn = gui.wait_for(str(tpl_btn), timeout=8, confidence=self.confidence)
             if pos_btn:
                 logger.info(f"Botão 'Autenticar' localizado em: {pos_btn}. Navegando para campos por ancoragem.")
-                # O campo de usuário fica ~55px acima do centro do botão Autenticar
+                # O campo de usuário fica ~93px acima do centro do botão Autenticar (calibrado em 1080p)
                 x_user = pos_btn[0]
-                y_user = pos_btn[1] - 55
+                y_user = pos_btn[1] - 93
                 gui.click(x_user, y_user)
                 time.sleep(0.5)
                 gui.hotkey("ctrl", "a")

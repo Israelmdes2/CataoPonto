@@ -1114,7 +1114,7 @@ def senior_login(
 
     # Ancoragem visual: O campo de usuário fica ~55px acima do botão azul
     x_user = pos_btn[0]
-    y_user = pos_btn[1] - 55
+    y_user = pos_btn[1] - 93
     _info(f"Clicando no campo de Login em ({x_user}, {y_user})...")
     gui.click(x_user, y_user)
     time.sleep(0.3)
