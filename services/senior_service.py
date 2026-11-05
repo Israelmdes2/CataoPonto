@@ -142,8 +142,33 @@ class SeniorService:
         password = senha or settings.SENIOR_PASSWORD
         logger.info(f"Realizando autenticação do usuário '{user}' no Senior...")
 
+        # Estratégia 1: Ancoragem pelo botão azul 'Autenticar'
+        tpl_btn = self._obter_template("botao_autenticar.png")
+        if tpl_btn:
+            pos_btn = gui.wait_for(str(tpl_btn), timeout=8, confidence=self.confidence)
+            if pos_btn:
+                logger.info(f"Botão 'Autenticar' localizado em: {pos_btn}. Navegando para campos por ancoragem.")
+                # O campo de usuário fica ~55px acima do centro do botão Autenticar
+                x_user = pos_btn[0]
+                y_user = pos_btn[1] - 55
+                gui.click(x_user, y_user)
+                time.sleep(0.5)
+                gui.hotkey("ctrl", "a")
+                gui.press("backspace")
+                gui.type_text(user)
+                gui.press("tab")
+                time.sleep(0.5)
+                gui.type_text(password)
+                time.sleep(0.5)
+                gui.click(pos_btn[0], pos_btn[1])
+                time.sleep(5)
+                return True
+
+        # Estratégia 2: Busca direta pelo campo de login
         clicou_login = self._clicar_se_encontrar("campo_login.png", timeout=5, descricao="Campo de Login")
         if clicou_login:
+            gui.hotkey("ctrl", "a")
+            gui.press("backspace")
             gui.type_text(user)
             gui.press("tab")
             time.sleep(0.5)
