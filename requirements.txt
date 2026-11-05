@@ -1,0 +1,25 @@
+fastapi
+uvicorn[standard]
+typer
+pydantic-settings
+python-json-logger
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+sqlalchemy[asyncio]
+aiosqlite
+alembic
+openpyxl
+pypdf
+opencv-python
+numpy
+pillow
+pyautogui
+python-dateutil
+
+# dev
+pytest
+pytest-asyncio
+httpx
+pytest-cov
+ruff
