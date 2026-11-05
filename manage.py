@@ -1003,24 +1003,56 @@ def automate_play(
 
 
 # ── Senior Automation Commands ─────────────────────────────
+def _disparar_senior(ambiente: str = "homologacao") -> bool:
+    import os
+    import subprocess
+    from pathlib import Path
+
+    # 1. Tenta pelo atalho nativo da Área de Trabalho Pública
+    base_senior = Path(r"C:\Users\Public\Desktop\Senior")
+    termo = "homolog" if "homolog" in ambiente.lower() else "produ"
+    if base_senior.exists():
+        for atalho in base_senior.rglob("*Controle*Ponto*.lnk"):
+            if termo in str(atalho).lower():
+                try:
+                    os.startfile(str(atalho))
+                    return True
+                except Exception:
+                    pass
+
+    # 2. Tenta via rede UNC com shell=True
+    srv_dir = "Senior_HML" if "homolog" in ambiente.lower() else "Senior"
+    srv_host = "SRVVETORH-HML" if "homolog" in ambiente.lower() else "SRVVETORH"
+    senior_dir = r"C:\Senior-hml" if "homolog" in ambiente.lower() else r"C:\Senior"
+    exe = f"\\\\{srv_host}\\{srv_dir}\\Iniciar.exe"
+    try:
+        subprocess.Popen(f'"{exe}" -SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\"', shell=True)
+        return True
+    except Exception:
+        pass
+
+    # 3. Tenta executável local
+    exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
+    if exe_local.exists():
+        try:
+            subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
+            return True
+        except Exception:
+            pass
+
+    return False
+
+
 @app.command("senior-open")
 def senior_open(
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
 ):
     """Abre o sistema Senior (Controle de Ponto e Refeitório)."""
-    import subprocess
     _sec(f"Abertura do Senior ({ambiente})")
-    
-    srv_dir = "Senior_HML" if ambiente.lower() == "homologacao" else "Senior"
-    srv_host = "SRVVETORH-HML" if ambiente.lower() == "homologacao" else "SRVVETORH"
-    senior_dir = r"C:\Senior-hml" if ambiente.lower() == "homologacao" else r"C:\Senior"
-    exe = f"\\{srv_host}\{srv_dir}\Iniciar.exe"
-    
-    try:
-        subprocess.Popen([exe, "-SystemModule:VETORH.RONDA", f'-seniordir:"{senior_dir}"'])
+    if _disparar_senior(ambiente):
         _ok("Executável do Senior disparado com sucesso.")
-    except Exception as e:
-        _err(f"Falha ao iniciar Senior: {e}")
+    else:
+        _err("Não foi possível disparar o Senior automaticamente.")
         raise typer.Exit(1)
 
 
@@ -1030,7 +1062,8 @@ def senior_login(
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
+    timeout: int = typer.Option(20, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
+    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual (0.1 a 1.0)"),
 ):
     """Realiza o login no sistema Senior por imagem (OpenCV + PyAutoGUI)."""
     import time
@@ -1042,17 +1075,11 @@ def senior_login(
 
     if abrir:
         _info(f"Iniciando Senior ({ambiente})...")
-        srv_dir = "Senior_HML" if ambiente.lower() == "homologacao" else "Senior"
-        srv_host = "SRVVETORH-HML" if ambiente.lower() == "homologacao" else "SRVVETORH"
-        senior_dir = r"C:\Senior-hml" if ambiente.lower() == "homologacao" else r"C:\Senior"
-        exe = f"\\{srv_host}\{srv_dir}\Iniciar.exe"
-        try:
-            import subprocess
-            subprocess.Popen([exe, "-SystemModule:VETORH.RONDA", f'-seniordir:"{senior_dir}"'])
+        if _disparar_senior(ambiente):
             _ok("Processo disparado. Aguardando interface...")
-            time.sleep(6)
-        except Exception as e:
-            _warn(f"Aviso ao iniciar: {e}. Prosseguindo para detecção visual...")
+            time.sleep(8)
+        else:
+            _warn("Aviso: não foi possível abrir pelo atalho. Prosseguindo para detecção visual...")
 
     user = usuario or settings.SENIOR_LOGIN
     pwd = senha or settings.SENIOR_PASSWORD
@@ -1070,16 +1097,17 @@ def senior_login(
         raise typer.Exit(1)
 
     _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s)...")
-    pos_btn = gui.wait_for(str(tpl_btn), timeout=float(timeout), confidence=0.82)
+    pos_btn = gui.wait_for(str(tpl_btn), timeout=float(timeout), confidence=confidence)
 
     if not pos_btn:
         screenshot_fail = prints_dir / "erro_login_nao_encontrado.png"
         try:
             gui.screenshot(save_to=str(screenshot_fail))
-            _warn(f"Tela de login não encontrada. Print salvo em: {screenshot_fail}")
+            _warn(f"Tela de login não encontrada. Print de auditoria salvo em: {screenshot_fail}")
         except Exception:
             pass
-        _err("Botão 'Autenticar' não encontrado na tela. Certifique-se de que a janela do Senior está visível.")
+        _err(f"Botão 'Autenticar' não encontrado na tela após {timeout}s.")
+        _info("Dica: Certifique-se de que a janela do Senior está aberta e não minimizada.")
         raise typer.Exit(1)
 
     _ok(f"Botão 'Autenticar' detectado com sucesso em: {pos_btn}")

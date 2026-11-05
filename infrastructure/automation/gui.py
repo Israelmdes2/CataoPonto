@@ -4,9 +4,6 @@ GUI automation helpers with PyAutoGUI.
 
 Atenção: PyAutoGUI requer display gráfico (X11/Wayland/Windows/macOS).
 Em servidores headless use --headless ao gerar este módulo.
-
-Warning: PyAutoGUI requires a graphical display.
-For headless servers, use --headless when generating.
 """
 from __future__ import annotations
 
@@ -16,6 +13,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
+
 
 def _ensure_display():
     """No-op; PyAutoGUI assume display disponível."""
@@ -28,6 +26,10 @@ def _pg():
     try:
         import pyautogui
         pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta
+        try:
+            pyautogui.useImageNotFoundException(False)
+        except Exception:
+            pass
         return pyautogui
     except Exception as e:
         raise RuntimeError(
@@ -107,12 +109,15 @@ def locate_on_screen(
     Locate image on screen. Returns (x, y, w, h) or None.
 
     Requer opencv-python para confidence < 1.0
-    Requires opencv-python for confidence < 1.0
     """
-    box = _pg().locateOnScreen(str(template_path), confidence=confidence)
-    if box is None:
+    try:
+        box = _pg().locateOnScreen(str(template_path), confidence=confidence)
+        if box is None:
+            return None
+        return (int(box.left), int(box.top), int(box.width), int(box.height))
+    except Exception as e:
+        logger.debug(f"locate_on_screen não encontrou {template_path}: {e}")
         return None
-    return (int(box.left), int(box.top), int(box.width), int(box.height))
 
 
 def locate_center_on_screen(
@@ -120,11 +125,14 @@ def locate_center_on_screen(
     confidence: float = 0.9,
 ) -> Optional[tuple[int, int]]:
     """Mesmo que locate_on_screen mas retorna centro / Same but returns center."""
-    box = locate_on_screen(template_path, confidence=confidence)
-    if box is None:
+    try:
+        box = locate_on_screen(template_path, confidence=confidence)
+        if box is None:
+            return None
+        x, y, w, h = box
+        return (x + w // 2, y + h // 2)
+    except Exception:
         return None
-    x, y, w, h = box
-    return (x + w // 2, y + h // 2)
 
 
 def wait_for(
@@ -136,9 +144,12 @@ def wait_for(
     """Aguarda imagem aparecer; retorna centro ou None."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        pt = locate_center_on_screen(template_path, confidence=confidence)
-        if pt is not None:
-            return pt
+        try:
+            pt = locate_center_on_screen(template_path, confidence=confidence)
+            if pt is not None:
+                return pt
+        except Exception:
+            pass
         time.sleep(poll_interval)
     return None
 
