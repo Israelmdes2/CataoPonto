@@ -112,10 +112,17 @@ class SeniorService:
 
         # Se houver executável direto configurado no .env
         if settings.SENIOR_EXECUTAVEL and Path(settings.SENIOR_EXECUTAVEL).exists():
-            logger.info(f"Executando Senior via caminho direto: {settings.SENIOR_EXECUTAVEL}")
-            subprocess.Popen([settings.SENIOR_EXECUTAVEL])
-            time.sleep(5)
-            return True
+            caminho = str(settings.SENIOR_EXECUTAVEL)
+            logger.info(f"Executando Senior via caminho configurado: {caminho}")
+            try:
+                if caminho.lower().endswith('.lnk'):
+                    os.startfile(caminho)
+                else:
+                    subprocess.Popen([caminho])
+                time.sleep(8)
+                return True
+            except Exception as e:
+                logger.error(f"Erro ao abrir Senior via caminho direto: {e}")
 
         # Tenta clicar no atalho da Área de Trabalho por imagem
         sucesso_pasta = self._clicar_se_encontrar("pasta_senior.png", timeout=5, descricao="Pasta Senior na Área de Trabalho")
