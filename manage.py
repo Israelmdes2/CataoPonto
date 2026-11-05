@@ -1001,5 +1001,120 @@ def automate_play(
     _ok("Concluído / Done")
 
 
+
+# ── Senior Automation Commands ─────────────────────────────
+@app.command("senior-open")
+def senior_open(
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+):
+    """Abre o sistema Senior (Controle de Ponto e Refeitório)."""
+    import subprocess
+    _sec(f"Abertura do Senior ({ambiente})")
+    
+    srv_dir = "Senior_HML" if ambiente.lower() == "homologacao" else "Senior"
+    srv_host = "SRVVETORH-HML" if ambiente.lower() == "homologacao" else "SRVVETORH"
+    senior_dir = r"C:\Senior-hml" if ambiente.lower() == "homologacao" else r"C:\Senior"
+    exe = f"\\{srv_host}\{srv_dir}\Iniciar.exe"
+    
+    try:
+        subprocess.Popen([exe, "-SystemModule:VETORH.RONDA", f'-seniordir:"{senior_dir}"'])
+        _ok("Executável do Senior disparado com sucesso.")
+    except Exception as e:
+        _err(f"Falha ao iniciar Senior: {e}")
+        raise typer.Exit(1)
+
+
+@app.command("senior-login")
+def senior_login(
+    usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
+    senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
+    abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
+):
+    """Realiza o login no sistema Senior por imagem (OpenCV + PyAutoGUI)."""
+    import time
+    from pathlib import Path
+    from core.config import settings
+    from infrastructure.automation import gui
+
+    _sec("Autenticação Senior Desktop (OpenCV + PyAutoGUI)")
+
+    if abrir:
+        _info(f"Iniciando Senior ({ambiente})...")
+        srv_dir = "Senior_HML" if ambiente.lower() == "homologacao" else "Senior"
+        srv_host = "SRVVETORH-HML" if ambiente.lower() == "homologacao" else "SRVVETORH"
+        senior_dir = r"C:\Senior-hml" if ambiente.lower() == "homologacao" else r"C:\Senior"
+        exe = f"\\{srv_host}\{srv_dir}\Iniciar.exe"
+        try:
+            import subprocess
+            subprocess.Popen([exe, "-SystemModule:VETORH.RONDA", f'-seniordir:"{senior_dir}"'])
+            _ok("Processo disparado. Aguardando interface...")
+            time.sleep(6)
+        except Exception as e:
+            _warn(f"Aviso ao iniciar: {e}. Prosseguindo para detecção visual...")
+
+    user = usuario or settings.SENIOR_LOGIN
+    pwd = senha or settings.SENIOR_PASSWORD
+    if not user:
+        _err("Usuário não configurado! Passe --user ou defina SENIOR_LOGIN no .env")
+        raise typer.Exit(1)
+
+    templates_dir = Path("assets/templates")
+    prints_dir = Path("assets/prints")
+    prints_dir.mkdir(parents=True, exist_ok=True)
+
+    tpl_btn = templates_dir / "botao_autenticar.png"
+    if not tpl_btn.exists():
+        _err(f"Template visual '{tpl_btn}' não encontrado.")
+        raise typer.Exit(1)
+
+    _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s)...")
+    pos_btn = gui.wait_for(str(tpl_btn), timeout=float(timeout), confidence=0.82)
+
+    if not pos_btn:
+        screenshot_fail = prints_dir / "erro_login_nao_encontrado.png"
+        try:
+            gui.screenshot(save_to=str(screenshot_fail))
+            _warn(f"Tela de login não encontrada. Print salvo em: {screenshot_fail}")
+        except Exception:
+            pass
+        _err("Botão 'Autenticar' não encontrado na tela. Certifique-se de que a janela do Senior está visível.")
+        raise typer.Exit(1)
+
+    _ok(f"Botão 'Autenticar' detectado com sucesso em: {pos_btn}")
+
+    # Ancoragem visual: O campo de usuário fica ~55px acima do botão azul
+    x_user = pos_btn[0]
+    y_user = pos_btn[1] - 55
+    _info(f"Clicando no campo de Login em ({x_user}, {y_user})...")
+    gui.click(x_user, y_user)
+    time.sleep(0.3)
+
+    gui.hotkey("ctrl", "a")
+    gui.press("backspace")
+    gui.type_text(user)
+    _ok(f"Usuário '{user}' inserido.")
+
+    gui.press("tab")
+    time.sleep(0.3)
+    gui.type_text(pwd)
+    _ok("Senha inserida.")
+
+    time.sleep(0.5)
+    _info("Clicando no botão 'Autenticar'...")
+    gui.click(pos_btn[0], pos_btn[1])
+
+    time.sleep(3)
+    print_sucesso = prints_dir / "02_apos_login.png"
+    try:
+        gui.screenshot(save_to=str(print_sucesso))
+        _ok(f"Print pós-login salvo em: {print_sucesso}")
+    except Exception:
+        pass
+
+    _ok("Fluxo de login no Senior executado com sucesso!")
+
+
 if __name__ == "__main__":
     app()

@@ -103,3 +103,4 @@ def testar_login_senior(usuario: str = None, senha: str = None, tirar_print: boo
 
 if __name__ == "__main__":
     testar_login_senior()
+
