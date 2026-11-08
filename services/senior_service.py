@@ -644,6 +644,77 @@ class SeniorService:
         logger.error(f"Timeout de {timeout_segundos}s aguardando arquivo PDF ser finalizado em '{pasta}'.")
         return None
 
+    def selecionar_tipo_arquivo_pdf(self) -> bool:
+        """
+        Garante que o campo 'Tipo:' do modal 'Salvar como' seja alterado
+        de 'Arquivos Impressos (*.imp)' para 'Arquivo PDF (*.pdf)'.
+        Utiliza visão computacional, clique no dropdown e validação estrita.
+        """
+        tpl_combo_imp = self._obter_template("combo_tipo_imp.png")
+        tpl_lbl_tipo = self._obter_template("label_tipo.png")
+
+        # 1. Localiza a combobox de Tipo
+        pos_combo = None
+        if tpl_combo_imp:
+            pos_combo = gui.locate_center_on_screen(str(tpl_combo_imp), confidence=0.75)
+
+        if not pos_combo and tpl_lbl_tipo:
+            pos_lbl = gui.locate_center_on_screen(str(tpl_lbl_tipo), confidence=0.75)
+            if pos_lbl:
+                # A combobox fica ~110px à direita do label 'Tipo:'
+                pos_combo = (pos_lbl[0] + 110, pos_lbl[1])
+
+        for tentativa in range(1, 4):
+            logger.info(f"Tentativa {tentativa} de selecionar Tipo 'Arquivo PDF (*.pdf)'...")
+
+            if pos_combo:
+                # Método A: Clique físico no combobox para abrir o dropdown
+                logger.info(f"Clicando na combobox do Tipo em {pos_combo} para abrir a lista suspensa...")
+                gui.click(pos_combo[0], pos_combo[1])
+                time.sleep(0.4)
+
+                # Com o dropdown aberto, clica na opção PDF logo abaixo (~22px para baixo)
+                x_pdf = pos_combo[0]
+                y_pdf = pos_combo[1] + 24
+                logger.info(f"Clicando na opção 'Arquivo PDF (*.pdf)' em ({x_pdf}, {y_pdf})...")
+                gui.click(x_pdf, y_pdf)
+                time.sleep(0.5)
+
+            # Método B de reforço: se ainda estiver exibindo .imp, aciona atalhos do Windows
+            if tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75):
+                logger.info("Tipo ainda em .imp. Acionando atalhos nativos: Alt+T -> F4 -> Down -> Enter...")
+                gui.hotkey("alt", "t")
+                time.sleep(0.3)
+                gui.press("f4")  # Expande dropdown
+                time.sleep(0.3)
+                gui.press("down")
+                time.sleep(0.3)
+                gui.press("enter")
+                time.sleep(0.5)
+
+            # Método C: Digitar 'a' duas vezes ou 'p'
+            if tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75):
+                logger.info("Tentando seleção via tecla 'p'...")
+                gui.hotkey("alt", "t")
+                time.sleep(0.3)
+                gui.press("p")
+                time.sleep(0.2)
+                gui.press("enter")
+                time.sleep(0.5)
+
+            # VALIDAÇÃO VISUAL: Se combo_tipo_imp NÃO estiver mais visível, foi alterado!
+            if tpl_combo_imp:
+                if not gui.is_visible(str(tpl_combo_imp), confidence=0.75):
+                    logger.info("VALIDAÇÃO CONCLUÍDA: O campo Tipo foi alterado com sucesso para 'Arquivo PDF (*.pdf)'!")
+                    return True
+                else:
+                    logger.warning(f"Tentativa {tentativa}: O campo Tipo ainda exibe 'Arquivos Impressos (*.imp)'.")
+            else:
+                return True
+
+        logger.error("Falha ao alterar o campo Tipo para PDF após 3 tentativas.")
+        return False
+
     def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None) -> Optional[Path]:
         """
         PASSO 7:
@@ -741,15 +812,11 @@ class SeniorService:
         gui.press("enter")
         time.sleep(1.2)
 
-        # 5. Seleciona obrigatoriamente o Tipo: 'Arquivo PDF (*.pdf)' (Passo fundamental para gerar PDF real!)
-        logger.info("Alterando o Tipo de Arquivo para 'Arquivo PDF (*.pdf)'...")
-        gui.hotkey("alt", "t")
-        time.sleep(0.3)
-        # No Delphi/Windows: o item 1 é '.imp' e o item 2 é '.pdf'
-        gui.press("down")
-        time.sleep(0.3)
-        gui.press("enter")
-        time.sleep(0.5)
+        # 5. Seleciona e VALIDA obrigatoriamente o Tipo: 'Arquivo PDF (*.pdf)'
+        logger.info("Selecionando e validando Tipo de Arquivo como 'Arquivo PDF (*.pdf)'...")
+        tipo_ok = self.selecionar_tipo_arquivo_pdf()
+        if not tipo_ok:
+            logger.warning("Aviso: Validação visual do Tipo PDF não confirmou alteração. Prosseguindo...")
 
         # 6. Preenche o nome do arquivo no campo 'Nome:'
         nome_arquivo = arquivo_final.name
