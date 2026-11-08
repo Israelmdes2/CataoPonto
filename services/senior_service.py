@@ -336,50 +336,61 @@ class SeniorService:
 
         logger.info(f"Janela de Modelos aberta! Botão Executar em: {pos_exec}")
 
-        # Coordenadas da seta para baixo da barra de rolagem (SÓ DESCE, NUNCA SOBE)
-        x_seta_baixo = pos_exec[0] - 57
-        y_seta_baixo = pos_exec[1] + 156
-
-        # Centro da grade para focar
-        x_grade = pos_exec[0] - 350
+        # Coordenadas calibradas na grade e na barra de rolagem
+        x_grade = pos_exec[0] - 300
         y_grade = pos_exec[1] + 60
+        x_trilho_barra = pos_exec[0] - 55
+        y_trilho_barra = pos_exec[1] + 110
+        y_seta_barra = pos_exec[1] + 165
 
         def _buscar_702_estrito():
             """Busca estritamente o template oficial com alta confiança (sem sensibilidade / sem falsos positivos)."""
             for tpl in [tpl_702_oficial, tpl_nome_oficial]:
                 if not tpl:
                     continue
-                # Confiança alta: no topo da tela dá ~0.44, na opção 702 dá ~0.95
                 for conf in [0.88, 0.82]:
                     p = gui.locate_center_on_screen(str(tpl), confidence=conf)
                     if p:
                         return p, tpl
             return None, None
 
-        # 2. Foca na grade de modelos com 1 clique inicial
+        # 2. Clica no centro da grade para focar o controle
         gui.click(x_grade, y_grade)
         time.sleep(0.3)
 
-        # 3. Loop de rolagem unidirecional: rola para baixo até o 702 aparecer
+        # 3. Loop de rolagem multi-método (scroll do mouse + PageDown + clique no trilho da barra)
         pos_702 = None
         qual_tpl = None
 
         logger.info("Verificando se opção 702 já está visível ou descendo a grade...")
-        # Checagem inicial
         pos_702, qual_tpl = _buscar_702_estrito()
 
         if not pos_702:
-            # Desce com passos rápidos na seta inferior e no scroll, verificando a cada etapa
-            for ciclo in range(20):
-                # Clica 3 vezes na seta para baixo da barra de rolagem (garante descida unidirecional)
-                for _ in range(3):
-                    gui.click(x_seta_baixo, y_seta_baixo)
-                    time.sleep(0.04)
+            for ciclo in range(25):
+                # Método 1: Roda o scroll do mouse para baixo sobre a grade
+                try:
+                    gui.scroll(-4)
+                except Exception:
+                    pass
 
-                time.sleep(0.15)
+                # Método 2: Tecla PageDown e Seta para Baixo
+                try:
+                    gui.press("pagedown")
+                    gui.press("down")
+                except Exception:
+                    pass
+
+                # Método 3: Clique no trilho inferior da barra de rolagem e na seta física
+                try:
+                    gui.click(x_trilho_barra, y_trilho_barra)
+                    gui.click(x_trilho_barra, y_seta_barra)
+                except Exception:
+                    pass
+
+                time.sleep(0.12)
                 pos_702, qual_tpl = _buscar_702_estrito()
                 if pos_702:
-                    logger.info(f"Opção 702 localizada com sucesso no ciclo de rolagem {ciclo + 1} em {pos_702}!")
+                    logger.info(f"Opção 702 localizada com sucesso no ciclo {ciclo + 1} em {pos_702}!")
                     break
 
         if not pos_702:
@@ -387,7 +398,6 @@ class SeniorService:
             return False
 
         # 4. Calcula o ponto exato do clique no NOME 'UnimedVA - Cartão Ponto Portal'
-        # Se achou pelo template completo (que tem o '702' à esquerda), desloca +35px para clicar no nome
         if qual_tpl and "opcao_702_oficial" in str(qual_tpl):
             x_nome = pos_702[0] + 35
             y_nome = pos_702[1]
