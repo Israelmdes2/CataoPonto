@@ -26,7 +26,7 @@ def testar_login_senior(usuario: str = None, senha: str = None, tirar_print: boo
     print("INICIANDO TESTE DO FLUXO DE LOGIN - SENIOR DESKTOP")
     print("=" * 60)
 
-    user = usuario or settings.SENIOR_LOGIN or "usuario_teste"
+    user = (usuario or settings.SENIOR_LOGIN or "usuario_teste").strip().lower()
     password = senha or settings.SENIOR_PASSWORD or "senha_teste"
 
     prints_dir = ROOT_DIR / "assets" / "prints"

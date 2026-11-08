@@ -151,7 +151,7 @@ class SeniorService:
         2. Inserir Senha;
         3. Clicar no botão 'Autenticar'.
         """
-        user = usuario or settings.SENIOR_LOGIN
+        user = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
         password = senha or settings.SENIOR_PASSWORD
         logger.info(f"Realizando autenticação do usuário '{user}' no Senior...")
 

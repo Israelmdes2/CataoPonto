@@ -1099,7 +1099,7 @@ def senior_login(
         else:
             _warn("Aviso: não foi possível abrir pelo atalho. Prosseguindo para detecção visual...")
 
-    user = usuario or settings.SENIOR_LOGIN
+    user = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
     pwd = senha or settings.SENIOR_PASSWORD
     if not user:
         _err("Usuário não configurado! Passe --user ou defina SENIOR_LOGIN no .env")

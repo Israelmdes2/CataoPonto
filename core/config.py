@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -54,6 +55,11 @@ class Settings(BaseSettings):
     EMAIL_REMETENTE: str = "digitaly.tech@unimedvaledoaco.coop.br"
     EMAIL_TESTE_MODO: bool = False
     EMAIL_TESTE_DESTINO: Optional[str] = None
+
+    @field_validator("SENIOR_LOGIN", mode="after")
+    @classmethod
+    def normalizar_senior_login(cls, v: str) -> str:
+        return v.strip().lower() if v else ""
 
     model_config = {
         "env_file": ".env",
