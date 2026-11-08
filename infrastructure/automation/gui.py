@@ -187,47 +187,85 @@ def is_visible(template_path: Union[str, Path], confidence: float = 0.70) -> boo
 
 
 def focar_janela(titulo_parcial: str) -> bool:
-    """Localiza janela pelo título parcial e traz para primeiro plano."""
+    """
+    Força a janela com 'titulo_parcial' a ir para o primeiro plano (Foreground) absoluto,
+    mesmo que o terminal/PowerShell esteja focado e bloqueando foco no Windows.
+    """
+    import ctypes
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    target_hwnds = []
+
+    def callback(hwnd, extra):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                t = buff.value.lower()
+                if titulo_parcial.lower() in t:
+                    target_hwnds.append(hwnd)
+        return True
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumWindows(WNDENUMPROC(callback), 0)
+
+    if not target_hwnds:
+        return False
+
+    hwnd = target_hwnds[0]
     try:
-        import pygetwindow as gw
-        janelas = [w for w in gw.getAllWindows() if titulo_parcial.lower() in (w.title or '').lower()]
-        if janelas:
-            win = janelas[0]
-            if win.isMinimized:
-                win.restore()
-            win.activate()
-            time.sleep(0.3)
+        # SW_RESTORE = 9, SW_MAXIMIZE = 3, SW_SHOW = 5
+        user32.ShowWindow(hwnd, 9)
+        time.sleep(0.1)
+
+        fore_hwnd = user32.GetForegroundWindow()
+        cur_thread = kernel32.GetCurrentThreadId()
+        fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None)
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+        if fore_thread != cur_thread:
+            user32.AttachThreadInput(cur_thread, fore_thread, True)
+        if target_thread != cur_thread:
+            user32.AttachThreadInput(cur_thread, target_thread, True)
+
+        # Truque do teclado Alt (VK_MENU = 0x12) para quebrar o bloqueio de LockSetForegroundWindow
+        user32.keybd_event(0x12, 0, 0, 0)
+        user32.keybd_event(0x12, 0, 2, 0)
+
+        # Eleva para HWND_TOPMOST (-1) e depois volta para HWND_NOTOPMOST (-2)
+        # SWP_NOSIZE | SWP_NOMOVE = 0x0001 | 0x0002 = 0x0003
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0003)
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0003)
+
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+
+        if fore_thread != cur_thread:
+            user32.AttachThreadInput(cur_thread, fore_thread, False)
+        if target_thread != cur_thread:
+            user32.AttachThreadInput(cur_thread, target_thread, False)
+
+        time.sleep(0.4)
+        return True
+    except Exception as e:
+        logger.debug(f"Erro ao forçar foco na janela '{titulo_parcial}': {e}")
+        return False
+
+
+def focar_senior_geral() -> bool:
+    """Busca e coloca em primeiro plano qualquer janela aberta pertencente ao Senior."""
+    termos = [
+        "autorização",
+        "gestão de pessoas",
+        "controle de ponto",
+        "seleção de modelos",
+        "senior",
+        "vetorh",
+        "ronda",
+    ]
+    for termo in termos:
+        if focar_janela(termo):
             return True
-    except Exception:
-        pass
-
-    # Fallback via Win32 API ctypes
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        target_hwnd = None
-
-        def callback(hwnd, extra):
-            nonlocal target_hwnd
-            if user32.IsWindowVisible(hwnd):
-                length = user32.GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buff = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(hwnd, buff, length + 1)
-                    if titulo_parcial.lower() in buff.value.lower():
-                        target_hwnd = hwnd
-                        return False
-            return True
-
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        user32.EnumWindows(WNDENUMPROC(callback), 0)
-
-        if target_hwnd:
-            user32.ShowWindow(target_hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(target_hwnd)
-            time.sleep(0.3)
-            return True
-    except Exception:
-        pass
-
     return False

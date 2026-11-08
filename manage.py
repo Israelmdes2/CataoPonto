@@ -1095,9 +1095,14 @@ def senior_login(
         _info(f"Iniciando Senior ({ambiente})...")
         if _disparar_senior(ambiente):
             _ok("Processo disparado. Aguardando interface...")
-            time.sleep(8)
+            for _ in range(8):
+                time.sleep(1)
+                gui.focar_senior_geral()
         else:
             _warn("Aviso: não foi possível abrir pelo atalho. Prosseguindo para detecção visual...")
+    else:
+        _info("Trazendo janela do Senior para primeiro plano...")
+        gui.focar_senior_geral()
 
     user = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
     pwd = senha or settings.SENIOR_PASSWORD

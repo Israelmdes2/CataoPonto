@@ -84,11 +84,8 @@ class SeniorService:
         return None
 
     def focar_janela_senior(self) -> bool:
-        """Garante que a janela do Senior esteja em primeiro plano."""
-        for titulo in ["Senior", "Controle de Ponto", "Autorização", "Vetorh", "Ronda"]:
-            if gui.focar_janela(titulo):
-                return True
-        return False
+        """Garante que a janela do Senior esteja em primeiro plano absoluto."""
+        return gui.focar_senior_geral()
 
     def _esta_visivel(self, nome_template: str, confidence: float = 0.70) -> bool:
         """Verifica se um elemento visual está presente na tela sem bloquear."""
