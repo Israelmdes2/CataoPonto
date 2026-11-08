@@ -1584,25 +1584,46 @@ def senior_fluxo(
 def senior_separar_pdfs(
     consolidado: str = typer.Option("", "--consolidado", "-c", help="Caminho do arquivo consolidado PDF"),
     destino: str = typer.Option("", "--destino", "-d", help="Pasta de destino dos PDFs individuais"),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout para aguardar o arquivo ser carregado e virar PDF"),
 ):
     """Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado."""
     from services.pdf_splitter_service import PdfSplitterService
+    from services.senior_service import SeniorService
     from core.config import settings
+    from datetime import datetime
     from pathlib import Path
 
     _sec("Passo 8: Separação de Cartões Individuais por Código")
-    pasta_cons = Path(settings.REDE_PASTA_CONSOLIDADO)
+    pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO)
+    data_hoje = datetime.now().strftime("%d%m%Y")
+    pasta_dia = pasta_base / data_hoje
+
     if consolidado:
         caminho_pdf = Path(consolidado)
     else:
-        # Busca o mais recente HRCP702*.pdf
-        arquivos = sorted(pasta_cons.glob("HRCP702*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
-        if not arquivos:
-            _err(f"Nenhum arquivo consolidado HRCP702*.pdf encontrado em: {pasta_cons}")
-            raise typer.Exit(1)
-        caminho_pdf = arquivos[0]
+        # Busca prioritariamente na pasta com a data do dia (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026)
+        if pasta_dia.exists():
+            _info(f"Monitorando pasta da data de hoje: {pasta_dia}...")
+            service = SeniorService()
+            caminho_pdf = service.aguardar_arquivo_pdf_estabilizado(
+                pasta=pasta_dia,
+                nome_esperado=f"HRCP702_{data_hoje}.pdf",
+                timeout_segundos=timeout,
+            )
+        else:
+            caminho_pdf = None
 
-    pasta_dest = Path(destino) if destino else Path(settings.REDE_PASTA_INDIVIDUAIS)
+        if not caminho_pdf or not caminho_pdf.exists():
+            # Fallback: procura na pasta raiz
+            arquivos = sorted(pasta_base.glob("**/HRCP702*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if not arquivos:
+                _err(f"Nenhum arquivo consolidado PDF encontrado em: {pasta_dia} ou {pasta_base}")
+                raise typer.Exit(1)
+            caminho_pdf = arquivos[0]
+
+    pasta_dest = Path(destino) if destino else (caminho_pdf.parent / "individuais")
+    pasta_dest.mkdir(parents=True, exist_ok=True)
+
     _info(f"Processando arquivo consolidado: {caminho_pdf}")
     _info(f"Destino dos individuais: {pasta_dest}")
 
@@ -1628,7 +1649,20 @@ def senior_enviar_emails(
     from pathlib import Path
 
     _sec(f"Passo 10: Disparo de E-mails aos Colaboradores (Modo Dia {modo})")
-    pasta_indiv = Path(pasta_individuais) if pasta_individuais else Path(settings.REDE_PASTA_INDIVIDUAIS)
+    data_hoje = datetime.now().strftime("%d%m%Y")
+    pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO)
+    pasta_dia = pasta_base / data_hoje
+
+    if pasta_individuais:
+        pasta_indiv = Path(pasta_individuais)
+    elif (pasta_dia / "individuais").exists():
+        pasta_indiv = pasta_dia / "individuais"
+    else:
+        pasta_indiv = Path(settings.REDE_PASTA_INDIVIDUAIS)
+
+    pasta_rel = (pasta_dia / "relatorios") if pasta_dia.exists() else Path(settings.REDE_PASTA_RELATORIOS)
+    pasta_rel.mkdir(parents=True, exist_ok=True)
+
     arq_planilha = planilha or settings.PLANILHA_COLABORADORES_PATH
 
     _info(f"Pasta de cartões individuais: {pasta_indiv}")
@@ -1643,7 +1677,6 @@ def senior_enviar_emails(
     agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
     for c in colaboradores:
-        # Busca o arquivo <codigo>.pdf ou Cartao_Ponto_<codigo>.pdf
         pdf_path = pasta_indiv / f"{c.matricula}.pdf"
         if not pdf_path.exists():
             pdf_alt = pasta_indiv / f"Cartao_Ponto_{c.matricula}.pdf"
@@ -1689,7 +1722,7 @@ def senior_enviar_emails(
     try:
         rel_path = RelatorioService().gerar_relatorio_execucao(
             registros=registros_execucao,
-            pasta_destino=settings.REDE_PASTA_RELATORIOS,
+            pasta_destino=pasta_rel,
             momento_execucao=datetime.now(),
         )
         _ok(f"Relatório de Controle gerado: {rel_path}")
@@ -1697,7 +1730,6 @@ def senior_enviar_emails(
         _warn(f"Aviso ao gerar relatório de controle: {ex_rel}")
 
     _ok(f"Disparo concluído: {total_envios} e-mails enviados com sucesso ({total_erros} falhas).")
-
 
 
 if __name__ == "__main__":

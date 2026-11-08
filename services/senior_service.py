@@ -553,27 +553,109 @@ class SeniorService:
         logger.info("Passo 6 executado com sucesso! Relatório disparado para geração.")
         return True
 
+    def aguardar_arquivo_pdf_estabilizado(
+        self,
+        pasta: Path,
+        nome_esperado: str,
+        timeout_segundos: int = 600,
+    ) -> Optional[Path]:
+        """
+        Aguarda o relatório ser totalmente gerado na pasta pelo Senior,
+        aguarda virar .pdf, estabilizar o tamanho (sem alteração por 3s)
+        e valida a integridade com PdfReader antes de liberar para o próximo passo.
+        """
+        from pypdf import PdfReader
+        arquivo_alvo = pasta / nome_esperado
+        inicio = time.time()
+        ultimo_tamanho = -1
+
+        logger.info(f"Monitorando pasta '{pasta}' aguardando arquivo PDF finalizado...")
+
+        while time.time() - inicio < timeout_segundos:
+            # 1. Procura pelo arquivo alvo ou arquivos gerados pelo Senior na pasta
+            candidato = None
+
+            if arquivo_alvo.exists() and arquivo_alvo.stat().st_size > 0:
+                candidato = arquivo_alvo
+            else:
+                # Se ainda não está com o nome esperado, verifica se há HRCP702.pdf ou HRCP702.imp
+                candidatos_pasta = list(pasta.glob("HRCP702*.pdf")) + list(pasta.glob("HRCP702*.imp"))
+                if candidatos_pasta:
+                    # Pega o mais recente
+                    candidatos_pasta.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                    mais_recente = candidatos_pasta[0]
+                    if mais_recente.stat().st_size > 0:
+                        # Se for .imp ou sem a data, tenta renomear para o nome esperado
+                        if mais_recente != arquivo_alvo:
+                            try:
+                                if arquivo_alvo.exists():
+                                    arquivo_alvo.unlink()
+                                mais_recente.rename(arquivo_alvo)
+                                logger.info(f"Arquivo renomeado para o padrão final: {mais_recente.name} -> {arquivo_alvo.name}")
+                                candidato = arquivo_alvo
+                            except Exception:
+                                candidato = mais_recente
+                        else:
+                            candidato = mais_recente
+
+            # 2. Se encontrou um candidato, testa a estabilização do tamanho e leitura
+            if candidato and candidato.exists():
+                tam_atual = candidato.stat().st_size
+                if tam_atual > 0:
+                    if tam_atual == ultimo_tamanho:
+                        # Tamanho estável por pelo menos 1 ciclo! Testa se o arquivo está desbloqueado e é um PDF íntegro
+                        try:
+                            with open(candidato, "rb") as f_test:
+                                reader = PdfReader(f_test)
+                                num_pags = len(reader.pages)
+                                if num_pags > 0:
+                                    logger.info(
+                                        f"Arquivo PDF validado com sucesso: '{candidato.name}' "
+                                        f"({num_pags} páginas, {tam_atual} bytes)."
+                                    )
+                                    return candidato
+                        except Exception as e:
+                            logger.info(f"Arquivo ainda sendo finalizado pelo Senior ({e}). Aguardando gravação...")
+                    else:
+                        logger.info(f"Arquivo em gravação pelo Senior... Tamanho atual: {tam_atual} bytes. Aguardando estabilização...")
+                        ultimo_tamanho = tam_atual
+                else:
+                    logger.info("Arquivo detectado com 0 bytes. Aguardando escrita do Senior...")
+
+            tempo_decorrido = int(time.time() - inicio)
+            if tempo_decorrido % 15 == 0 and tempo_decorrido > 0:
+                logger.info(f"Aguardando PDF ser finalizado na rede ({tempo_decorrido}s / {timeout_segundos}s)...")
+
+            time.sleep(3)
+
+        logger.error(f"Timeout de {timeout_segundos}s aguardando arquivo PDF ser finalizado em '{pasta}'.")
+        return None
+
     def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None) -> Optional[Path]:
         """
         PASSO 7:
-        Aguarda o relatório ser gerado pelo Senior (pode levar 7 a 10 min conforme o PDD),
-        detecta a janela 'Visualização do Relatório', clica no ícone do disquete ('Salvar')
-        e salva o arquivo PDF consolidado na pasta de rede informada (padrão: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO).
+        Aguarda o relatório ser gerado pelo Senior, clica no ícone do disquete ('Salvar'),
+        navega até a pasta específica com a DATA DA EXECUÇÃO (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026),
+        salva o arquivo como HRCP702_DDMMAAAA.pdf e aguarda a finalização e estabilização completa do PDF.
         """
         from datetime import datetime
         import pyperclip
 
         timeout_max = timeout_segundos or settings.SENIOR_TIMEOUT_RELATORIO_SEGUNDOS
 
-        # 1. Define a pasta e o caminho do arquivo destino
-        pasta_destino = Path(settings.REDE_PASTA_CONSOLIDADO or r"V:\grp-aud-doc\DIGITALY_CARTAO_PONTO")
+        # 1. Define a pasta base e a subpasta com a DATA DA EXECUÇÃO (ex: 08112026)
+        pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO or r"V:\grp-aud-doc\DIGITALY_CARTAO_PONTO")
+        data_hoje_str = datetime.now().strftime("%d%m%Y")
+        pasta_destino = pasta_base / data_hoje_str
+
         try:
             pasta_destino.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Pasta de destino confirmada na rede: {pasta_destino}")
+            (pasta_destino / "individuais").mkdir(parents=True, exist_ok=True)
+            (pasta_destino / "relatorios").mkdir(parents=True, exist_ok=True)
+            logger.info(f"Pasta da execução do dia criada/confirmada na rede: {pasta_destino}")
         except Exception as e:
-            logger.error(f"Erro ao criar/acessar pasta de rede '{pasta_destino}': {e}")
+            logger.error(f"Erro ao criar pastas de rede em '{pasta_destino}': {e}")
 
-        data_hoje_str = datetime.now().strftime("%d%m%Y")
         nome_consolidado_padrao = f"HRCP702_{data_hoje_str}.pdf"
         if caminho_destino_pdf:
             arquivo_final = Path(caminho_destino_pdf)
@@ -587,7 +669,6 @@ class SeniorService:
         tpl_disquete = self._obter_template("icone_salvar_disquete.png")
         tpl_tit_rel = self._obter_template("titulo_visualizacao_relatorio.png")
         tpl_vis = self._obter_template("barra_visualizar_100.png")
-        tpl_tag_pasta = self._obter_template("tag_pasta_digitaly_cartao_ponto.png")
         tpl_btn_salvar = self._obter_template("botao_salvar_dialogo.png")
 
         inicio = time.time()
@@ -595,23 +676,19 @@ class SeniorService:
 
         # 2. Polling até a janela do relatório abrir
         while time.time() - inicio < timeout_max:
-            # A) Procura pelo ícone do disquete ('Salvar')
             if tpl_disquete:
                 pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.75)
                 if pos_disquete:
                     logger.info(f"Ícone de Salvar (Disquete) detectado em: {pos_disquete}!")
                     break
 
-            # B) Procura pelo título da janela 'Visualização do Relatório'
             if tpl_tit_rel:
                 pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.75)
                 if pos_tit:
                     logger.info("Título 'Visualização do Relatório' detectado!")
-                    # Ancoragem relativa: disquete fica ~240px à direita e ~25px abaixo do título
                     pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
                     break
 
-            # C) Procura pela barra 'Visualizar 100'
             if tpl_vis:
                 pos_vis = gui.locate_center_on_screen(str(tpl_vis), confidence=0.75)
                 if pos_vis:
@@ -629,7 +706,7 @@ class SeniorService:
             logger.error(f"Timeout de {timeout_max}s: Janela de relatório não apareceu na tela.")
             return None
 
-        # 3. Traz a janela do relatório para o foco e clica no ícone do disquete
+        # 3. Foca na janela de Visualização e clica no disquete
         logger.info("Trazendo janela 'Visualização do Relatório' para foco...")
         gui.focar_janela("Visualização do Relatório")
         time.sleep(0.5)
@@ -638,51 +715,17 @@ class SeniorService:
         gui.click(pos_disquete[0], pos_disquete[1])
         time.sleep(2)
 
-        # Salva print da janela Salvar como aberta
-        try:
-            print_dialogo = self.prints_dir / "09_janela_salvar_como.png"
-            gui.screenshot(save_to=str(print_dialogo))
-            logger.info(f"Print do diálogo Salvar como registrado em: {print_dialogo}")
-        except Exception:
-            pass
-
-        # 4. Verifica se já está na pasta DIGITALY_CARTAO_PONTO
-        logger.info("Verificando se o modal já está na pasta 'DIGITALY_CARTAO_PONTO'...")
-        ja_na_pasta = False
-        if tpl_tag_pasta:
-            pos_tag = gui.locate_center_on_screen(str(tpl_tag_pasta), confidence=0.72)
-            if pos_tag:
-                logger.info(f"Modal já está na pasta 'DIGITALY_CARTAO_PONTO' (tag detectada em {pos_tag})!")
-                ja_na_pasta = True
-
-        # Se NÃO estiver na pasta, seleciona a pasta de rede
-        if not ja_na_pasta:
-            logger.info(f"Modal NÃO está na pasta correta. Selecionando pasta: '{pasta_destino}'...")
-
-            # Método 1: Digitar o caminho da pasta no campo Nome e teclar Enter (navega para a pasta)
-            gui.hotkey("alt", "n")
-            time.sleep(0.3)
-            gui.hotkey("ctrl", "a")
-            gui.press("backspace")
-            pyperclip.copy(str(pasta_destino))
-            gui.hotkey("ctrl", "v")
-            time.sleep(0.3)
-            gui.press("enter")
-            time.sleep(1.2)
-
-            # Valida se agora a tag da pasta aparece
-            if tpl_tag_pasta and gui.is_visible(str(tpl_tag_pasta), confidence=0.72):
-                logger.info("Navegação bem-sucedida para 'DIGITALY_CARTAO_PONTO'!")
-            else:
-                # Método 2 alternativo via atalho de barra de endereço do Explorer
-                logger.info("Tentando seleção de pasta alternativa via atalho Alt+D...")
-                gui.hotkey("alt", "d")
-                time.sleep(0.3)
-                pyperclip.copy(str(pasta_destino))
-                gui.hotkey("ctrl", "v")
-                time.sleep(0.2)
-                gui.press("enter")
-                time.sleep(1.2)
+        # 4. Navega obrigatoriamente para dentro da pasta da data (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026)
+        logger.info(f"Navegando o diálogo Salvar como para a pasta da data: '{pasta_destino}'...")
+        gui.hotkey("alt", "n")
+        time.sleep(0.3)
+        gui.hotkey("ctrl", "a")
+        gui.press("backspace")
+        pyperclip.copy(str(pasta_destino))
+        gui.hotkey("ctrl", "v")
+        time.sleep(0.3)
+        gui.press("enter")
+        time.sleep(1.2)
 
         # 5. Preenche o nome do arquivo no campo 'Nome:'
         nome_arquivo = arquivo_final.name
@@ -718,44 +761,13 @@ class SeniorService:
         gui.press("enter")
         time.sleep(2)
 
-        # 7. Aguarda o arquivo ser totalmente gravado em disco
-        logger.info(f"Aguardando gravação completa do arquivo '{arquivo_final}' na rede...")
-        gravado = False
-        for i in range(30):
-            if arquivo_final.exists() and arquivo_final.stat().st_size > 0:
-                logger.info(f"Arquivo PDF salvo com sucesso em: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
-                gravado = True
-                break
-            time.sleep(1)
-
-        # Se o Senior salvou como HRCP702.pdf ou HRCP702.imp na pasta, renomeia para HRCP702_DDMMAAAA.pdf
-        padrao_sem_data = pasta_destino / "HRCP702.pdf"
-        padrao_imp = pasta_destino / "HRCP702.imp"
-        for cand in [padrao_sem_data, padrao_imp]:
-            if cand.exists() and cand != arquivo_final and cand.stat().st_size > 0:
-                try:
-                    if arquivo_final.exists():
-                        arquivo_final.unlink()
-                    cand.rename(arquivo_final)
-                    logger.info(f"Arquivo renomeado com a data do dia: {cand.name} -> {arquivo_final.name}")
-                    gravado = True
-                    break
-                except Exception as e:
-                    logger.warning(f"Não foi possível renomear {cand} para {arquivo_final}: {e}")
-
-        if not gravado:
-            logger.warning(f"Arquivo '{arquivo_final}' ainda não localizado diretamente. Verificando pasta...")
-            arquivos_recentes = sorted(pasta_destino.glob("HRCP702*"), key=lambda f: f.stat().st_mtime, reverse=True)
-            if arquivos_recentes and arquivos_recentes[0].stat().st_size > 0:
-                arq_encontrado = arquivos_recentes[0]
-                if arq_encontrado != arquivo_final:
-                    try:
-                        arq_encontrado.rename(arquivo_final)
-                        logger.info(f"Arquivo renomeado para o padrão com data: {arquivo_final.name}")
-                    except Exception:
-                        arquivo_final = arq_encontrado
-                logger.info(f"Arquivo localizado na pasta de destino: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
-                gravado = True
+        # 7. Aguarda o arquivo ser totalmente carregado na pasta, virar .pdf e estabilizar o tamanho
+        logger.info(f"Aguardando arquivo ser gerado e estabilizado como PDF em '{pasta_destino}'...")
+        arquivo_validado = self.aguardar_arquivo_pdf_estabilizado(
+            pasta=pasta_destino,
+            nome_esperado=arquivo_final.name,
+            timeout_segundos=timeout_max,
+        )
 
         # Salva print de auditoria do Passo 7
         try:
@@ -765,11 +777,11 @@ class SeniorService:
         except Exception:
             pass
 
-        if gravado:
-            logger.info("Passo 7 executado com sucesso!")
-            return arquivo_final
+        if arquivo_validado and arquivo_validado.exists():
+            logger.info(f"Passo 7 executado com sucesso! Arquivo consolidado pronto: {arquivo_validado}")
+            return arquivo_validado
         else:
-            logger.warning("Passo 7 concluído mas a gravação do arquivo não pôde ser confirmada.")
+            logger.warning("Passo 7 concluído mas a gravação e estabilização do arquivo não pôde ser confirmada.")
             return arquivo_final
 
     def executar_fluxo_extracao(
