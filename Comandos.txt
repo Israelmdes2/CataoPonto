@@ -1,8 +1,29 @@
-Completo
+# ==============================================================================
+# COMANDOS RPA - PROJETO RH ENVIO DE CARTÃO PONTO (UNIMED VALE DO AÇO)
+# ==============================================================================
+
+# FLUXO COMPLETO (Passos 1 ao 10): Login -> Menus -> Modelo 702 -> Datas -> Salvar Consolidado -> Separar PDFs -> Envio de E-mails
 .venv\Scripts\python.exe manage.py senior-fluxo
 
-Tela do 702 já aberta
+# COMANDOS MODULARES (Passo a Passo):
+
+# Passo 1 ao 3: Login no Senior Desktop
+.venv\Scripts\python.exe manage.py senior-login
+
+# Passo 4: Navegação de Menus (Cálculos -> Apuração -> Listar -> Cartão Ponto)
+.venv\Scripts\python.exe manage.py senior-menu-cartao
+
+# Passo 5: Seleção estrita do Modelo 702 e Executar
 .venv\Scripts\python.exe manage.py senior-selecionar-702
 
-Tela dos parametros já aberta
+# Passo 6: Preenchimento das Datas no modal Valores de Entrada (Simulação Dia 04)
 .venv\Scripts\python.exe manage.py senior-valores-entrada
+
+# Passo 7: Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\HRCP702_DDMMAAAA.pdf
+.venv\Scripts\python.exe manage.py senior-aguardar-salvar
+
+# Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado (ex: 3898.pdf)
+.venv\Scripts\python.exe manage.py senior-separar-pdfs
+
+# Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados
+.venv\Scripts\python.exe manage.py senior-enviar-emails

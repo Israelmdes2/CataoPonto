@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 import openpyxl
 
 from core.config import settings
@@ -13,83 +13,91 @@ class ColaboradoresService:
     @staticmethod
     def carregar_colaboradores(caminho_arquivo: Optional[str] = None) -> List[Colaborador]:
         """
-        Lê a planilha de colaboradores fornecida pela Unimed contendo:
-        Nome, Matrícula, Setor, Email.
+        Lê a planilha de colaboradores fornecida pela Unimed:
+        'RELAÇÃO E-MAIL COLABORADORES- ATUALIZADO.xlsx'
+        - Linha de cabeçalho:
+          - Coluna A: Cadastro (código do empregado)
+          - Coluna C: Nome do empregado
+          - Coluna G: E-mail do empregado
         """
         caminho = Path(caminho_arquivo or settings.PLANILHA_COLABORADORES_PATH)
         if not caminho.exists():
-            logger.warning(f"Planilha de colaboradores não encontrada em: {caminho}. Criando modelo de exemplo.")
-            ColaboradoresService.criar_planilha_modelo(caminho)
+            raise FileNotFoundError(f"Planilha de colaboradores não encontrada em: {caminho}")
 
+        logger.info(f"Lendo colaboradores da planilha: {caminho}...")
         wb = openpyxl.load_workbook(caminho, data_only=True)
         sheet = wb.active
 
         colaboradores: List[Colaborador] = []
-        headers = {}
+        linha_cabecalho = None
+        col_cadastro = None
+        col_nome = None
+        col_email = None
 
-        # Mapeia cabeçalhos da primeira linha
-        for col_idx, cell in enumerate(sheet[1], start=1):
-            if cell.value:
-                val = str(cell.value).strip().lower()
-                if "matricula" in val or "matrícula" in val or "crachá" in val:
-                    headers["matricula"] = col_idx
-                elif "nome" in val or "colaborador" in val or "empregado" in val:
-                    headers["nome"] = col_idx
-                elif "setor" in val or "departamento" in val:
-                    headers["setor"] = col_idx
-                elif "email" in val or "e-mail" in val:
-                    headers["email"] = col_idx
+        # 1. Procura dinamicamente a linha que contém os cabeçalhos nas primeiras 10 linhas
+        for r in range(1, min(12, sheet.max_row + 1)):
+            for c in range(1, min(15, sheet.max_column + 1)):
+                val = str(sheet.cell(r, c).value or "").strip().lower()
+                if "cadastro" in val or "matrícula" in val or "matricula" in val:
+                    col_cadastro = c
+                    linha_cabecalho = r
+                elif "nome" in val or "empregado" in val or "colaborador" in val:
+                    col_nome = c
+                elif "e-mail" in val or "email" in val:
+                    col_email = c
 
-        if "matricula" not in headers or "email" not in headers:
-            raise ValueError(
-                f"A planilha precisa conter pelo menos as colunas 'Matrícula' e 'Email'. Cabeçalhos encontrados: {headers}"
-            )
+            if col_cadastro and col_email:
+                linha_cabecalho = r
+                break
 
-        # Itera sobre as linhas de dados
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            if not row:
+        # Fallback fixo para a planilha da Unimed: Coluna A (1), C (3), G (7)
+        if not col_cadastro:
+            col_cadastro = 1
+        if not col_nome:
+            col_nome = 3
+        if not col_email:
+            col_email = 7
+        if not linha_cabecalho:
+            linha_cabecalho = 3
+
+        logger.info(
+            f"Mapeamento de colunas da planilha (cabeçalho na linha {linha_cabecalho}): "
+            f"Cadastro=Coluna {col_cadastro}, Nome=Coluna {col_nome}, Email=Coluna {col_email}"
+        )
+
+        # 2. Itera a partir da linha seguinte ao cabeçalho
+        for r in range(linha_cabecalho + 1, sheet.max_row + 1):
+            val_cad = sheet.cell(r, col_cadastro).value
+            val_nome = sheet.cell(r, col_nome).value
+            val_email = sheet.cell(r, col_email).value
+
+            if val_cad is None or val_email is None:
                 continue
 
-            matricula_raw = row[headers["matricula"] - 1] if headers.get("matricula") else None
-            nome_raw = row[headers["nome"] - 1] if headers.get("nome") else None
-            setor_raw = row[headers["setor"] - 1] if headers.get("setor") else ""
-            email_raw = row[headers["email"] - 1] if headers.get("email") else None
-
-            if not matricula_raw or not email_raw:
-                continue
-
-            # Sanitização de matrícula (caso venha 12345.0 do Excel)
-            if isinstance(matricula_raw, float):
-                matricula = str(int(matricula_raw)).strip()
+            # Sanitização do código de cadastro (ex: 4821 ou 4821.0 -> '4821')
+            if isinstance(val_cad, (int, float)):
+                matricula = str(int(val_cad)).strip()
             else:
-                matricula = str(matricula_raw).strip()
+                matricula = str(val_cad).strip()
 
-            nome = str(nome_raw).strip() if nome_raw else f"Colaborador {matricula}"
-            setor = str(setor_raw).strip() if setor_raw else ""
-            email = str(email_raw).strip()
+            nome = str(val_nome).strip() if val_nome else f"Colaborador {matricula}"
+            email = str(val_email).strip()
 
-            colaboradores.append(
-                Colaborador(
-                    matricula=matricula,
-                    nome=nome,
-                    setor=setor,
-                    email=email,
+            if matricula and email:
+                colaboradores.append(
+                    Colaborador(
+                        matricula=matricula,
+                        nome=nome,
+                        setor="",
+                        email=email,
+                    )
                 )
-            )
 
         logger.info(f"Total de {len(colaboradores)} colaboradores carregados com sucesso da planilha.")
         return colaboradores
 
-    @staticmethod
-    def criar_planilha_modelo(caminho: Path) -> None:
-        """Cria uma planilha modelo com dados de exemplo se o arquivo não existir."""
-        caminho.parent.mkdir(parents=True, exist_ok=True)
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Colaboradores"
-        ws.append(["Nome", "Matrícula", "Setor", "Email"])
-        ws.append(["Exemplo Colaborador 1", "1001", "Recursos Humanos", "colaborador1@unimedvaledoaco.coop.br"])
-        ws.append(["Exemplo Colaborador 2", "1002", "Pronto Atendimento", "colaborador2@unimedvaledoaco.coop.br"])
-        wb.save(caminho)
-        logger.info(f"Planilha de exemplo gerada em: {caminho}")
-
+    @classmethod
+    def carregar_mapa_colaboradores(cls, caminho_arquivo: Optional[str] = None) -> Dict[str, Colaborador]:
+        """Retorna os colaboradores em um dicionário mapeado por matrícula: {matricula: Colaborador}."""
+        lista = cls.carregar_colaboradores(caminho_arquivo)
+        return {c.matricula: c for c in lista}

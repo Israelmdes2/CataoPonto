@@ -1499,6 +1499,77 @@ def senior_fluxo(
                 arq_salvo = srv.aguardar_relatorio_e_salvar()
                 if arq_salvo:
                     _ok(f"Etapa 5 concluída com sucesso! Relatório consolidado salvo em: {arq_salvo}")
+                    
+                    # 7. Separação dos Cartões Individuais por Código de Empregado (Passo 8)
+                    _info("Etapa 6: Separando cartões individuais por código de empregado (Passo 8)...")
+                    from services.pdf_splitter_service import PdfSplitterService
+                    mapa_individuais = PdfSplitterService.dividir_cartoes_ponto(
+                        caminho_consolidado=arq_salvo,
+                    )
+                    _ok(f"Etapa 6 concluída! {len(mapa_individuais)} cartões individuais gerados.")
+
+                    # 8. Identificação na Planilha e Disparo de E-mails (Passo 10)
+                    _info("Etapa 7: Identificando colaboradores na planilha e enviando e-mails (Passo 10)...")
+                    from services.colaboradores_service import ColaboradoresService
+                    from services.email_service import EmailService
+                    from services.relatorio_service import RelatorioService
+                    from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
+                    from datetime import datetime
+
+                    colaboradores = ColaboradoresService.carregar_colaboradores()
+                    total_envios = 0
+                    total_erros = 0
+                    registros_execucao = []
+                    agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+                    for c in colaboradores:
+                        pdf_path = mapa_individuais.get(c.matricula)
+                        reg = RegistroExecucaoColaborador(
+                            data_execucao=agora_str,
+                            matricula=c.matricula,
+                            colaborador=c.nome,
+                            email=c.email,
+                            status=StatusExecucao.PENDENTE,
+                            motivo_erro="",
+                        )
+
+                        if not pdf_path or not Path(pdf_path).exists():
+                            reg.status = StatusExecucao.ERRO
+                            reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado."
+                            total_erros += 1
+                            registros_execucao.append(reg)
+                            continue
+
+                        try:
+                            EmailService.enviar_cartao_ponto(
+                                destinatario_email=c.email,
+                                nome_colaborador=c.nome,
+                                caminho_pdf_anexo=pdf_path,
+                                modo="04",
+                            )
+                            reg.status = StatusExecucao.SUCESSO
+                            total_envios += 1
+                            _ok(f"E-mail enviado para {c.nome} ({c.email}) | Anexo: {pdf_path.name}")
+                        except Exception as ex_mail:
+                            reg.status = StatusExecucao.ERRO
+                            reg.motivo_erro = str(ex_mail)
+                            total_erros += 1
+                            _warn(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
+
+                        registros_execucao.append(reg)
+
+                    # Gera o Relatório de Controle em Excel conforme PDD
+                    try:
+                        relatorio_path = RelatorioService().gerar_relatorio_execucao(
+                            registros=registros_execucao,
+                            pasta_destino=settings.REDE_PASTA_RELATORIOS,
+                            momento_execucao=datetime.now(),
+                        )
+                        _ok(f"Relatório de Execução gerado com sucesso em: {relatorio_path}")
+                    except Exception as ex_rel:
+                        _warn(f"Aviso ao gerar relatório de execução: {ex_rel}")
+
+                    _ok(f"Etapa 7 concluída! {total_envios} e-mails enviados com sucesso ({total_erros} erros).")
                 else:
                     _warn("Aviso na Etapa 5: Relatório não foi salvo automaticamente.")
             else:
@@ -1507,6 +1578,126 @@ def senior_fluxo(
             _warn("Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo 702.")
 
     _ok("Fluxo geral executado com sucesso!")
+
+
+@app.command("senior-separar-pdfs")
+def senior_separar_pdfs(
+    consolidado: str = typer.Option("", "--consolidado", "-c", help="Caminho do arquivo consolidado PDF"),
+    destino: str = typer.Option("", "--destino", "-d", help="Pasta de destino dos PDFs individuais"),
+):
+    """Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado."""
+    from services.pdf_splitter_service import PdfSplitterService
+    from core.config import settings
+    from pathlib import Path
+
+    _sec("Passo 8: Separação de Cartões Individuais por Código")
+    pasta_cons = Path(settings.REDE_PASTA_CONSOLIDADO)
+    if consolidado:
+        caminho_pdf = Path(consolidado)
+    else:
+        # Busca o mais recente HRCP702*.pdf
+        arquivos = sorted(pasta_cons.glob("HRCP702*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not arquivos:
+            _err(f"Nenhum arquivo consolidado HRCP702*.pdf encontrado em: {pasta_cons}")
+            raise typer.Exit(1)
+        caminho_pdf = arquivos[0]
+
+    pasta_dest = Path(destino) if destino else Path(settings.REDE_PASTA_INDIVIDUAIS)
+    _info(f"Processando arquivo consolidado: {caminho_pdf}")
+    _info(f"Destino dos individuais: {pasta_dest}")
+
+    mapa = PdfSplitterService.dividir_cartoes_ponto(caminho_pdf, pasta_dest)
+    _ok(f"Separação concluída com sucesso! Total de {len(mapa)} arquivos individuais gerados.")
+    for mat, p in list(mapa.items())[:5]:
+        _info(f" - Código {mat} -> {p.name}")
+
+
+@app.command("senior-enviar-emails")
+def senior_enviar_emails(
+    modo: str = typer.Option("04", "--modo", "-m", help="Modo do PDD: 04, 20 ou 30"),
+    pasta_individuais: str = typer.Option("", "--individuais", "-i", help="Pasta contendo os PDFs individuais"),
+    planilha: str = typer.Option("", "--planilha", "-p", help="Caminho da planilha de colaboradores"),
+):
+    """Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados."""
+    from services.colaboradores_service import ColaboradoresService
+    from services.email_service import EmailService
+    from services.relatorio_service import RelatorioService
+    from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
+    from core.config import settings
+    from datetime import datetime
+    from pathlib import Path
+
+    _sec(f"Passo 10: Disparo de E-mails aos Colaboradores (Modo Dia {modo})")
+    pasta_indiv = Path(pasta_individuais) if pasta_individuais else Path(settings.REDE_PASTA_INDIVIDUAIS)
+    arq_planilha = planilha or settings.PLANILHA_COLABORADORES_PATH
+
+    _info(f"Pasta de cartões individuais: {pasta_indiv}")
+    _info(f"Planilha de colaboradores: {arq_planilha}")
+
+    colaboradores = ColaboradoresService.carregar_colaboradores(arq_planilha)
+    _info(f"Total de {len(colaboradores)} colaboradores cadastrados para envio.")
+
+    total_envios = 0
+    total_erros = 0
+    registros_execucao = []
+    agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    for c in colaboradores:
+        # Busca o arquivo <codigo>.pdf ou Cartao_Ponto_<codigo>.pdf
+        pdf_path = pasta_indiv / f"{c.matricula}.pdf"
+        if not pdf_path.exists():
+            pdf_alt = pasta_indiv / f"Cartao_Ponto_{c.matricula}.pdf"
+            if pdf_alt.exists():
+                pdf_path = pdf_alt
+
+        reg = RegistroExecucaoColaborador(
+            data_execucao=agora_str,
+            matricula=c.matricula,
+            colaborador=c.nome,
+            email=c.email,
+            status=StatusExecucao.PENDENTE,
+            motivo_erro="",
+        )
+
+        if not pdf_path.exists():
+            reg.status = StatusExecucao.ERRO
+            reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado na pasta."
+            total_erros += 1
+            registros_execucao.append(reg)
+            _warn(f"Cartão do colaborador {c.nome} (Código: {c.matricula}) não encontrado.")
+            continue
+
+        try:
+            EmailService.enviar_cartao_ponto(
+                destinatario_email=c.email,
+                nome_colaborador=c.nome,
+                caminho_pdf_anexo=pdf_path,
+                modo=modo,
+            )
+            reg.status = StatusExecucao.SUCESSO
+            total_envios += 1
+            _ok(f"E-mail enviado para: {c.nome} <{c.email}> | Anexo: {pdf_path.name}")
+        except Exception as ex_mail:
+            reg.status = StatusExecucao.ERRO
+            reg.motivo_erro = str(ex_mail)
+            total_erros += 1
+            _err(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
+
+        registros_execucao.append(reg)
+
+    # Gera relatório de execução
+    try:
+        rel_path = RelatorioService().gerar_relatorio_execucao(
+            registros=registros_execucao,
+            pasta_destino=settings.REDE_PASTA_RELATORIOS,
+            momento_execucao=datetime.now(),
+        )
+        _ok(f"Relatório de Controle gerado: {rel_path}")
+    except Exception as ex_rel:
+        _warn(f"Aviso ao gerar relatório de controle: {ex_rel}")
+
+    _ok(f"Disparo concluído: {total_envios} e-mails enviados com sucesso ({total_erros} falhas).")
+
 
 
 if __name__ == "__main__":

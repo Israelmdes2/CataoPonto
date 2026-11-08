@@ -573,11 +573,13 @@ class SeniorService:
         except Exception as e:
             logger.error(f"Erro ao criar/acessar pasta de rede '{pasta_destino}': {e}")
 
+        data_hoje_str = datetime.now().strftime("%d%m%Y")
+        nome_consolidado_padrao = f"HRCP702_{data_hoje_str}.pdf"
         if caminho_destino_pdf:
             arquivo_final = Path(caminho_destino_pdf)
             arquivo_final.parent.mkdir(parents=True, exist_ok=True)
         else:
-            arquivo_final = pasta_destino / "HRCP702.pdf"
+            arquivo_final = pasta_destino / nome_consolidado_padrao
 
         logger.info(f"PASSO 7: Aguardando relatório ser gerado pelo Senior (timeout: {timeout_max}s / ~{timeout_max//60} min)...")
         logger.info(f"Arquivo final será salvo em: {arquivo_final}")
@@ -726,11 +728,32 @@ class SeniorService:
                 break
             time.sleep(1)
 
+        # Se o Senior salvou como HRCP702.pdf ou HRCP702.imp na pasta, renomeia para HRCP702_DDMMAAAA.pdf
+        padrao_sem_data = pasta_destino / "HRCP702.pdf"
+        padrao_imp = pasta_destino / "HRCP702.imp"
+        for cand in [padrao_sem_data, padrao_imp]:
+            if cand.exists() and cand != arquivo_final and cand.stat().st_size > 0:
+                try:
+                    if arquivo_final.exists():
+                        arquivo_final.unlink()
+                    cand.rename(arquivo_final)
+                    logger.info(f"Arquivo renomeado com a data do dia: {cand.name} -> {arquivo_final.name}")
+                    gravado = True
+                    break
+                except Exception as e:
+                    logger.warning(f"Não foi possível renomear {cand} para {arquivo_final}: {e}")
+
         if not gravado:
             logger.warning(f"Arquivo '{arquivo_final}' ainda não localizado diretamente. Verificando pasta...")
             arquivos_recentes = sorted(pasta_destino.glob("HRCP702*"), key=lambda f: f.stat().st_mtime, reverse=True)
             if arquivos_recentes and arquivos_recentes[0].stat().st_size > 0:
-                arquivo_final = arquivos_recentes[0]
+                arq_encontrado = arquivos_recentes[0]
+                if arq_encontrado != arquivo_final:
+                    try:
+                        arq_encontrado.rename(arquivo_final)
+                        logger.info(f"Arquivo renomeado para o padrão com data: {arquivo_final.name}")
+                    except Exception:
+                        arquivo_final = arq_encontrado
                 logger.info(f"Arquivo localizado na pasta de destino: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
                 gravado = True
 
