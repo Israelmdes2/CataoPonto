@@ -311,10 +311,11 @@ class SeniorService:
         logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
         self.focar_janela_senior()
 
-        # 1. Aguarda a janela abrir (identificada pelo título ou pelo botão Executar)
+        # 1. Aguarda a janela abrir (identificada pelo botão Executar ou pelo Título)
         tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
         tpl_exec = self._obter_template("botao_executar.png")
         tpl_702 = self._obter_template("codigo_702.png")
+        tpl_texto_702 = self._obter_template("texto_702_cartao_portal.png")
 
         pos_exec = None
         if tpl_exec:
@@ -322,49 +323,114 @@ class SeniorService:
 
         if not pos_exec and tpl_titulo:
             pos_tit = gui.wait_for(str(tpl_titulo), timeout=5, confidence=self.confidence)
-            if pos_tit and tpl_exec:
-                pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
+            if pos_tit:
+                if tpl_exec:
+                    pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
+                if not pos_exec:
+                    pos_exec = (pos_tit[0] + 510, pos_tit[1] + 35)
 
         if not pos_exec:
             logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada após timeout.")
             return False
 
-        logger.info(f"Janela de Modelos aberta! Botão Executar localizado em: {pos_exec}")
+        logger.info(f"Janela de Modelos aberta! Botão Executar em: {pos_exec}")
 
-        # 2. Posiciona o foco no centro da lista de modelos (à esquerda do botão Executar)
-        x_lista = pos_exec[0] - 250
-        y_lista = pos_exec[1]
-        logger.info(f"Focando grade de modelos em ({x_lista}, {y_lista})...")
-        gui.click(x_lista, y_lista)
-        time.sleep(0.5)
+        # Coordenadas calculadas da barra de rolagem e da lista
+        # O botão Executar tem canto esquerdo ~pos_exec[0] - 45
+        # A barra de rolagem vertical fica ~58px à esquerda do centro do botão Executar
+        x_barra = pos_exec[0] - 58
+        y_barra_topo = pos_exec[1]
+        y_barra_fundo = pos_exec[1] + 130
+        y_seta_baixo = pos_exec[1] + 142
+        x_lista = pos_exec[0] - 300
+        y_lista = pos_exec[1] + 50
 
-        # 3. Rola a barra de rolagem até localizar a opção 702
-        pos_702 = None
-        for i in range(20):
-            # Verifica se a opção 702 já está visível
-            if tpl_702:
-                pos_702 = gui.locate_center_on_screen(str(tpl_702), confidence=0.70)
+        def _tentar_localizar_702():
+            for tpl in [tpl_702, tpl_texto_702]:
+                if not tpl:
+                    continue
+                for conf in [0.72, 0.65, 0.58]:
+                    p = gui.locate_center_on_screen(str(tpl), confidence=conf)
+                    if p:
+                        return p
+            return None
+
+        # 2. Verifica se a opção 702 já está visível logo de início
+        pos_702 = _tentar_localizar_702()
+
+        # 3. Se ainda não estiver visível, rola a barra de rolagem para o final
+        if not pos_702:
+            logger.info("Opção 702 ainda não visível no topo. Rolando a barra de rolagem para o final...")
+            try:
+                gui.move_to(x_barra, y_barra_topo, duration=0.2)
+                gui.drag_to(x_barra, y_barra_fundo, duration=0.6)
+                time.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"Falha ao arrastar barra de rolagem: {e}")
+
+            pos_702 = _tentar_localizar_702()
+
+        # Estratégia 2: Clica no trilho inferior da barra de rolagem e na seta para baixo
+        if not pos_702:
+            logger.info("Clicando no trilho inferior da barra de rolagem e na seta para baixo...")
+            for _ in range(6):
+                gui.click(x_barra, y_barra_fundo)
+                time.sleep(0.2)
+                gui.click(x_barra, y_seta_baixo)
+                time.sleep(0.2)
+                pos_702 = _tentar_localizar_702()
                 if pos_702:
-                    logger.info(f"Opção 702 encontrada na tela em {pos_702} (após {i} rolagens)!")
                     break
 
-            # Desce a lista com PageDown ou scroll do mouse
-            gui.press("pagedown")
-            time.sleep(0.4)
-
+        # Estratégia 3: Foca na lista e usa teclas PageDown / Down
         if not pos_702:
-            logger.warning("Opção 702 ('UnimedVA - Cartão Ponto Portal') não encontrada na lista após rolagem.")
-            return False
+            logger.info("Focando na lista para enviar teclas PageDown / Down...")
+            gui.click(x_lista, y_lista)
+            time.sleep(0.3)
+            for _ in range(10):
+                gui.press("pagedown")
+                time.sleep(0.25)
+                pos_702 = _tentar_localizar_702()
+                if pos_702:
+                    break
+                gui.press("down")
+                time.sleep(0.15)
+                pos_702 = _tentar_localizar_702()
+                if pos_702:
+                    break
 
-        # 4. Clica no nome da opção 702 para selecionar
-        logger.info(f"Clicando na opção 702 em {pos_702}...")
+        # 4. Fallback de Seleção se o template falhar mas a lista já estiver totalmente no final
+        if not pos_702:
+            logger.warning("Opção 702 não detectada por template matching. Tentando clique na última linha da lista...")
+            y_ultima_linha = pos_exec[1] + 120
+            pos_702 = (x_lista, y_ultima_linha)
+
+        # 5. Clica no nome da opção 702 para selecionar
+        logger.info(f"Clicando na opção 702 ('UnimedVA - Cartão Ponto Portal') em {pos_702}...")
         gui.click(pos_702[0], pos_702[1])
         time.sleep(0.8)
 
-        # 5. Clica no botão Executar
+        # Salva print da opção selecionada para auditoria
+        try:
+            print_702 = self.prints_dir / "05_opcao_702_selecionada.png"
+            gui.screenshot(save_to=str(print_702))
+            logger.info(f"Print pós-seleção do 702 salvo em: {print_702}")
+        except Exception:
+            pass
+
+        # 6. Clica no botão Executar
         logger.info(f"Clicando no botão Executar em {pos_exec}...")
         gui.click(pos_exec[0], pos_exec[1])
         time.sleep(3)
+
+        # Salva print pós-Executar para auditoria do Passo 6
+        try:
+            print_pos_exec = self.prints_dir / "06_tela_parametros_datas.png"
+            gui.screenshot(save_to=str(print_pos_exec))
+            logger.info(f"Print pós-Executar salvo em: {print_pos_exec}")
+        except Exception:
+            pass
+
         logger.info("Passo 5 executado com sucesso!")
         return True
 
