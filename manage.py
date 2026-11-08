@@ -1201,7 +1201,29 @@ def senior_login(
     if not login_fechou:
         _warn("Aviso: Tela de login ainda presente após 30s. Verifique se usuário/senha estão corretos.")
 
-    time.sleep(5)
+    time.sleep(2)
+    # Passo 1.5: Clica no ícone das 3 pessoas (colaboradores) para abrir o módulo
+    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
+    if not tpl_modulo.exists():
+        tpl_modulo = templates_dir / "icone_modulo.png"
+
+    if tpl_modulo.exists():
+        _info("Aguardando ícone do módulo (3 colaboradores) na tela principal pós-login...")
+        pos_mod = None
+        for seg in range(1, 16):
+            gui.focar_senior_geral()
+            pos_mod = gui.locate_center_on_screen(str(tpl_modulo), confidence=0.68)
+            if pos_mod:
+                _ok(f"Ícone de módulo detectado em {pos_mod}! Clicando para abrir o módulo...")
+                gui.click(pos_mod[0], pos_mod[1])
+                time.sleep(3)
+                break
+            time.sleep(1)
+
+        if not pos_mod:
+            _info("Ícone de módulo não visto nos 15s iniciais; verificando menus...")
+
+    time.sleep(2)
     print_sucesso = prints_dir / "02_apos_login.png"
     try:
         gui.screenshot(save_to=str(print_sucesso))
@@ -1209,7 +1231,7 @@ def senior_login(
     except Exception:
         pass
 
-    _ok("Fluxo de login no Senior executado com sucesso!")
+    _ok("Fluxo de login e abertura do módulo executados com sucesso!")
 
 
 @app.command("senior-calculos")

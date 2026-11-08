@@ -122,22 +122,35 @@ class SeniorService:
 
     def garantir_menu_principal_pronto(self, timeout: float = 30.0) -> bool:
         """
-        Garante com auto-recuperação que o menu principal (ex: Cálculos) está pronto.
-        Trata carregamento lento, perda de foco e necessidade de clicar no ícone de módulo.
+        Garante que o módulo está ativo e a barra de menus ('Cálculos') visível:
+        1. Se Cálculos já está visível: retorna True imediatamente.
+        2. Se o ícone das 3 pessoas (colaboradores) estiver na tela: clica nele para abrir o módulo.
+        3. Aguarda a renderização dos menus principais.
         """
-        logger.info(f"Garantindo que a tela principal com menus está pronta (timeout: {timeout}s)...")
+        logger.info(f"Garantindo que o módulo e menus do Senior estão prontos (timeout: {timeout}s)...")
         deadline = time.time() + timeout
         tpl_calc = self._obter_template("menu_calculos.png")
+        tpl_mod = self._obter_template("icone_modulo.png")
 
         while time.time() < deadline:
+            self.focar_janela_senior()
+
             # 1. Se Cálculos já está visível, sucesso imediato
             if tpl_calc and gui.is_visible(str(tpl_calc), confidence=0.70):
                 logger.info("Menu principal ('Cálculos') confirmado e pronto!")
                 return True
 
-            # 2. Se não estiver visível, tenta resolver obstáculos conhecidos
+            # 2. Se o ícone das 3 pessoas estiver na tela, clica nele
+            if tpl_mod and gui.is_visible(str(tpl_mod), confidence=0.68):
+                pos = gui.locate_center_on_screen(str(tpl_mod), confidence=0.68)
+                if pos:
+                    logger.info(f"Ícone de módulo (3 colaboradores) detectado em {pos}. Clicando para abrir módulo...")
+                    gui.click(pos[0], pos[1])
+                    time.sleep(3)
+                    continue
+
             self.tratar_obstaculos_conhecidos()
-            time.sleep(1.5)
+            time.sleep(1.0)
 
         logger.warning(f"Timeout de {timeout}s: Menu principal não foi detectado.")
         return False
