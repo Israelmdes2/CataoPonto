@@ -577,8 +577,7 @@ class SeniorService:
             arquivo_final = Path(caminho_destino_pdf)
             arquivo_final.parent.mkdir(parents=True, exist_ok=True)
         else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            arquivo_final = pasta_destino / f"HRCP702_consolidado_{timestamp}.pdf"
+            arquivo_final = pasta_destino / "HRCP702.pdf"
 
         logger.info(f"PASSO 7: Aguardando relatório ser gerado pelo Senior (timeout: {timeout_max}s / ~{timeout_max//60} min)...")
         logger.info(f"Arquivo final será salvo em: {arquivo_final}")
@@ -586,6 +585,8 @@ class SeniorService:
         tpl_disquete = self._obter_template("icone_salvar_disquete.png")
         tpl_tit_rel = self._obter_template("titulo_visualizacao_relatorio.png")
         tpl_vis = self._obter_template("barra_visualizar_100.png")
+        tpl_tag_pasta = self._obter_template("tag_pasta_digitaly_cartao_ponto.png")
+        tpl_btn_salvar = self._obter_template("botao_salvar_dialogo.png")
 
         inicio = time.time()
         pos_disquete = None
@@ -599,16 +600,7 @@ class SeniorService:
                     logger.info(f"Ícone de Salvar (Disquete) detectado em: {pos_disquete}!")
                     break
 
-            # B) Procura pela barra 'Visualizar 100'
-            if tpl_vis:
-                pos_vis = gui.locate_center_on_screen(str(tpl_vis), confidence=0.75)
-                if pos_vis:
-                    logger.info(f"Barra de ferramentas do relatório detectada em {pos_vis}!")
-                    # O disquete fica ~60px à direita da barra 'Visualizar 100'
-                    pos_disquete = (pos_vis[0] + 62, pos_vis[1])
-                    break
-
-            # C) Procura pelo título da janela
+            # B) Procura pelo título da janela 'Visualização do Relatório'
             if tpl_tit_rel:
                 pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.75)
                 if pos_tit:
@@ -617,17 +609,26 @@ class SeniorService:
                     pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
                     break
 
+            # C) Procura pela barra 'Visualizar 100'
+            if tpl_vis:
+                pos_vis = gui.locate_center_on_screen(str(tpl_vis), confidence=0.75)
+                if pos_vis:
+                    logger.info(f"Barra de ferramentas do relatório detectada em {pos_vis}!")
+                    pos_disquete = (pos_vis[0] + 62, pos_vis[1])
+                    break
+
             tempo_decorrido = int(time.time() - inicio)
             if tempo_decorrido % 15 == 0:
                 logger.info(f"Aguardando geração do relatório no Senior... ({tempo_decorrido}s decorridos)")
 
-            time.sleep(3)
+            time.sleep(2)
 
         if not pos_disquete:
             logger.error(f"Timeout de {timeout_max}s: Janela de relatório não apareceu na tela.")
             return None
 
         # 3. Traz a janela do relatório para o foco e clica no ícone do disquete
+        logger.info("Trazendo janela 'Visualização do Relatório' para foco...")
         gui.focar_janela("Visualização do Relatório")
         time.sleep(0.5)
 
@@ -635,39 +636,118 @@ class SeniorService:
         gui.click(pos_disquete[0], pos_disquete[1])
         time.sleep(2)
 
-        # 4. Na janela 'Salvar como' do Windows: cola o caminho completo do arquivo
-        logger.info(f"Inserindo caminho completo do arquivo na janela Salvar como: '{arquivo_final}'...")
-        pyperclip.copy(str(arquivo_final))
+        # Salva print da janela Salvar como aberta
+        try:
+            print_dialogo = self.prints_dir / "09_janela_salvar_como.png"
+            gui.screenshot(save_to=str(print_dialogo))
+            logger.info(f"Print do diálogo Salvar como registrado em: {print_dialogo}")
+        except Exception:
+            pass
+
+        # 4. Verifica se já está na pasta DIGITALY_CARTAO_PONTO
+        logger.info("Verificando se o modal já está na pasta 'DIGITALY_CARTAO_PONTO'...")
+        ja_na_pasta = False
+        if tpl_tag_pasta:
+            pos_tag = gui.locate_center_on_screen(str(tpl_tag_pasta), confidence=0.72)
+            if pos_tag:
+                logger.info(f"Modal já está na pasta 'DIGITALY_CARTAO_PONTO' (tag detectada em {pos_tag})!")
+                ja_na_pasta = True
+
+        # Se NÃO estiver na pasta, seleciona a pasta de rede
+        if not ja_na_pasta:
+            logger.info(f"Modal NÃO está na pasta correta. Selecionando pasta: '{pasta_destino}'...")
+
+            # Método 1: Digitar o caminho da pasta no campo Nome e teclar Enter (navega para a pasta)
+            gui.hotkey("alt", "n")
+            time.sleep(0.3)
+            gui.hotkey("ctrl", "a")
+            gui.press("backspace")
+            pyperclip.copy(str(pasta_destino))
+            gui.hotkey("ctrl", "v")
+            time.sleep(0.3)
+            gui.press("enter")
+            time.sleep(1.2)
+
+            # Valida se agora a tag da pasta aparece
+            if tpl_tag_pasta and gui.is_visible(str(tpl_tag_pasta), confidence=0.72):
+                logger.info("Navegação bem-sucedida para 'DIGITALY_CARTAO_PONTO'!")
+            else:
+                # Método 2 alternativo via atalho de barra de endereço do Explorer
+                logger.info("Tentando seleção de pasta alternativa via atalho Alt+D...")
+                gui.hotkey("alt", "d")
+                time.sleep(0.3)
+                pyperclip.copy(str(pasta_destino))
+                gui.hotkey("ctrl", "v")
+                time.sleep(0.2)
+                gui.press("enter")
+                time.sleep(1.2)
+
+        # 5. Preenche o nome do arquivo no campo 'Nome:'
+        nome_arquivo = arquivo_final.name
+        logger.info(f"Inserindo nome do arquivo '{nome_arquivo}' no campo Nome...")
+        gui.hotkey("alt", "n")
         time.sleep(0.3)
         gui.hotkey("ctrl", "a")
         gui.press("backspace")
+        pyperclip.copy(nome_arquivo)
         gui.hotkey("ctrl", "v")
         time.sleep(0.5)
-        gui.press("enter")
-        time.sleep(1)
 
-        # Trata possível modal de confirmação de sobrescrita ('Sim' / 'Enter')
-        gui.press("enter")
-        time.sleep(3)
+        # 6. Clica em 'Salvar'
+        salvo_clicado = False
+        if tpl_btn_salvar:
+            pos_btn_salvar = gui.locate_center_on_screen(str(tpl_btn_salvar), confidence=0.75)
+            if pos_btn_salvar:
+                logger.info(f"Clicando no botão 'Salvar' em {pos_btn_salvar}...")
+                gui.click(pos_btn_salvar[0], pos_btn_salvar[1])
+                salvo_clicado = True
 
-        # 5. Aguarda o arquivo ser totalmente gravado em disco
-        logger.info("Aguardando gravação completa do arquivo PDF na rede...")
-        for _ in range(30):
+        if not salvo_clicado:
+            logger.info("Acionando botão 'Salvar' via atalho Alt+S / Enter...")
+            gui.hotkey("alt", "s")
+            time.sleep(0.3)
+            gui.press("enter")
+
+        time.sleep(1.5)
+
+        # Trata possível modal de confirmação de substituição ('Deseja substituí-lo? Sim')
+        gui.hotkey("alt", "s")
+        time.sleep(0.3)
+        gui.press("enter")
+        time.sleep(2)
+
+        # 7. Aguarda o arquivo ser totalmente gravado em disco
+        logger.info(f"Aguardando gravação completa do arquivo '{arquivo_final}' na rede...")
+        gravado = False
+        for i in range(30):
             if arquivo_final.exists() and arquivo_final.stat().st_size > 0:
                 logger.info(f"Arquivo PDF salvo com sucesso em: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
+                gravado = True
                 break
             time.sleep(1)
 
+        if not gravado:
+            logger.warning(f"Arquivo '{arquivo_final}' ainda não localizado diretamente. Verificando pasta...")
+            arquivos_recentes = sorted(pasta_destino.glob("HRCP702*"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if arquivos_recentes and arquivos_recentes[0].stat().st_size > 0:
+                arquivo_final = arquivos_recentes[0]
+                logger.info(f"Arquivo localizado na pasta de destino: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
+                gravado = True
+
         # Salva print de auditoria do Passo 7
         try:
-            print_salvo = self.prints_dir / "09_relatorio_consolidado_salvo.png"
+            print_salvo = self.prints_dir / "10_relatorio_consolidado_salvo.png"
             gui.screenshot(save_to=str(print_salvo))
             logger.info(f"Print pós-salvamento registrado em: {print_salvo}")
         except Exception:
             pass
 
-        logger.info("Passo 7 executado com sucesso!")
-        return arquivo_final
+        if gravado:
+            logger.info("Passo 7 executado com sucesso!")
+            return arquivo_final
+        else:
+            logger.warning("Passo 7 concluído mas a gravação do arquivo não pôde ser confirmada.")
+            return arquivo_final
 
     def executar_fluxo_extracao(
         self,

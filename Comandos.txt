@@ -1,36 +1,8 @@
-# Comandos Úteis do Projeto - Envio de Cartão Ponto (Senior Desktop)
-
-# ==============================================================================
-# FLUXO GERAL CONJUNTO (Login + Navegação Menus + Seleção Modelo 702)
-# ==============================================================================
-# Executa de ponta a ponta: abre o Senior, faz login, navega nos menus, seleciona o 702 e clica em Executar
+Completo
 .venv\Scripts\python.exe manage.py senior-fluxo
 
-# Executa o fluxo geral aproveitando a janela do Senior já aberta na tela:
-.venv\Scripts\python.exe manage.py senior-fluxo --no-abrir
-
-
-# ==============================================================================
-# COMANDOS INDIVIDUAIS POR ETAPA
-# ==============================================================================
-# 1. Apenas Passo 5: Selecionar o relatório 702 (UnimedVA - Cartão Ponto Portal) e Executar
+Tela do 702 já aberta
 .venv\Scripts\python.exe manage.py senior-selecionar-702
 
-# 2. Apenas Passo 4: Navegação dos Menus (Cálculos -> Apuração -> Listar -> Cartão Ponto)
-.venv\Scripts\python.exe manage.py senior-menu-cartao
-
-# 3. Apenas Passo 2/3: Login no Senior Desktop (Homologação)
-.venv\Scripts\python.exe manage.py senior-login
-.venv\Scripts\python.exe manage.py senior-login --no-abrir
-
-# 4. Clicar em qualquer elemento/menu individualmente
-.venv\Scripts\python.exe manage.py senior-click botao_executar
-.venv\Scripts\python.exe manage.py senior-click codigo_702
-.venv\Scripts\python.exe manage.py senior-click menu_cartao_ponto
-.venv\Scripts\python.exe manage.py senior-click menu_listar
-.venv\Scripts\python.exe manage.py senior-click menu_apuracao
-.venv\Scripts\python.exe manage.py senior-click menu_calculos
-.venv\Scripts\python.exe manage.py senior-click icone_modulo
-
-# 5. Executar os testes unitários do robô
-.venv\Scripts\python.exe -m pytest
+Tela dos parametros já aberta
+.venv\Scripts\python.exe manage.py senior-valores-entrada
