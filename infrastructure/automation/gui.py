@@ -138,7 +138,7 @@ def locate_center_on_screen(
 def wait_for(
     template_path: Union[str, Path],
     timeout: float = 10.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = 0.12,
     confidence: float = 0.9,
 ) -> Optional[tuple[int, int]]:
     """Aguarda imagem aparecer; retorna centro ou None."""

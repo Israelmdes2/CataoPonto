@@ -1373,7 +1373,7 @@ def senior_menu_cartao(
 
         _ok(f"Menu '{desc}' encontrado em {pos}. Clicando...")
         gui.click(pos[0], pos[1])
-        time.sleep(1.2)
+        time.sleep(0.35)
 
     time.sleep(2)
     print_tela = prints_dir / "04_tela_relatorio_702.png"
@@ -1430,7 +1430,7 @@ def senior_fluxo(
     # 2. Aguarda estabilização da tela pós-login
     import time
     _info("Aguardando estabilização dos menus pós-login...")
-    time.sleep(3)
+    time.sleep(1.2)
 
     # 3. Executa a Navegação de Menus (Passo 4)
     _info("Etapa 2: Navegando pelos menus até Cartão Ponto...")

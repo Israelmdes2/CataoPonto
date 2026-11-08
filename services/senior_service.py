@@ -297,8 +297,8 @@ class SeniorService:
         ]
 
         for template, desc in steps:
-            time.sleep(1)
-            self._clicar_se_encontrar(template, timeout=5, descricao=desc)
+            self._clicar_se_encontrar(template, timeout=4, descricao=desc)
+            time.sleep(0.3)
 
         return True
 
