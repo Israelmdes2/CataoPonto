@@ -199,7 +199,7 @@ class SeniorService:
             logger.info(f"Executando Senior via caminho configurado ({ambiente}): {caminho}")
             try:
                 if caminho.lower().endswith('.lnk'):
-                    os.startfile(caminho)
+                    subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Invoke-Item '{caminho}'"])
                 else:
                     subprocess.Popen([caminho])
                 time.sleep(6)

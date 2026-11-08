@@ -23,6 +23,18 @@ import subprocess
 import typer
 from pathlib import Path
 
+# Garante suporte a UTF-8 sem erro charmap no Windows
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 app = typer.Typer(
     name="manage",
     help=(
@@ -36,11 +48,11 @@ app = typer.Typer(
 )
 
 
-def _ok(m):   typer.echo(typer.style("  ✔  " + str(m), fg=typer.colors.GREEN))
-def _info(m): typer.echo(typer.style("  →  " + str(m), fg=typer.colors.CYAN))
-def _warn(m): typer.echo(typer.style("  ⚠  " + str(m), fg=typer.colors.YELLOW))
-def _err(m):  typer.echo(typer.style("  ✘  " + str(m), fg=typer.colors.RED))
-def _sec(t):  typer.echo(typer.style("\n  ── " + t, bold=True))
+def _ok(m):   typer.echo(typer.style("  [OK] " + str(m), fg=typer.colors.GREEN))
+def _info(m): typer.echo(typer.style("  [..] " + str(m), fg=typer.colors.CYAN))
+def _warn(m): typer.echo(typer.style("  [!]  " + str(m), fg=typer.colors.YELLOW))
+def _err(m):  typer.echo(typer.style("  [X]  " + str(m), fg=typer.colors.RED))
+def _sec(t):  typer.echo(typer.style("\n  == " + t, bold=True))
 
 
 def _write(path, content):
@@ -1019,7 +1031,7 @@ def _disparar_senior(ambiente: str = "homologacao") -> bool:
     if caminho_env and Path(caminho_env).exists():
         try:
             if str(caminho_env).lower().endswith(".lnk"):
-                os.startfile(str(caminho_env))
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Invoke-Item '{caminho_env}'"])
             else:
                 subprocess.Popen([str(caminho_env)])
             return True
