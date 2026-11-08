@@ -83,6 +83,19 @@ class SeniorService:
             return caminho_raiz
         return None
 
+    def _clicar_icone_modulo_se_necessario(self, timeout: int = 6) -> bool:
+        """Em Homologação, localiza e clica no ícone do módulo (Gestão de Pessoas / Ponto)."""
+        tpl_mod = self._obter_template("icone_modulo.png")
+        if tpl_mod:
+            logger.info("Verificando se o ícone de módulo do Senior está visível...")
+            pos = gui.wait_for(str(tpl_mod), timeout=timeout, confidence=0.75)
+            if pos:
+                logger.info(f"Ícone de módulo encontrado em {pos}. Clicando...")
+                gui.click(pos[0], pos[1])
+                time.sleep(2)
+                return True
+        return False
+
     def _clicar_se_encontrar(self, nome_template: str, timeout: int = 10, descricao: str = "") -> bool:
         """Localiza o template na tela usando Visão Computacional / PyAutoGUI e clica."""
         template_path = self._obter_template(nome_template)
@@ -133,7 +146,9 @@ class SeniorService:
                     os.startfile(caminho)
                 else:
                     subprocess.Popen([caminho])
-                time.sleep(8)
+                time.sleep(6)
+                # Em homologação, clica no ícone do módulo se aparecer na tela inicial
+                self._clicar_icone_modulo_se_necessario()
                 return True
             except Exception as e:
                 logger.error(f"Erro ao abrir Senior via caminho direto: {e}")
@@ -163,10 +178,13 @@ class SeniorService:
         password = senha or settings.SENIOR_PASSWORD
         logger.info(f"Realizando autenticação do usuário '{user}' no Senior...")
 
+        # Verifica se ainda está na tela de seleção do módulo (HML)
+        self._clicar_icone_modulo_se_necessario(timeout=3)
+
         # Estratégia 1: Ancoragem pelo botão azul 'Autenticar'
         tpl_btn = self._obter_template("botao_autenticar.png")
         if tpl_btn:
-            pos_btn = gui.wait_for(str(tpl_btn), timeout=8, confidence=self.confidence)
+            pos_btn = gui.wait_for(str(tpl_btn), timeout=12, confidence=self.confidence)
             if pos_btn:
                 logger.info(f"Botão 'Autenticar' localizado em: {pos_btn}. Navegando para campos por ancoragem.")
                 # O campo de usuário fica ~93px acima do centro do botão Autenticar (calibrado em 1080p)

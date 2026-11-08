@@ -1120,6 +1120,18 @@ def senior_login(
         _err(f"Template visual 'botao_autenticar.png' não encontrado em '{templates_dir / amb_clean}' nem em '{templates_dir}'.")
         raise typer.Exit(1)
 
+    # Em Homologação: se a tela de seleção de módulo estiver visível, clica no ícone do módulo
+    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
+    if not tpl_modulo.exists():
+        tpl_modulo = templates_dir / "icone_modulo.png"
+
+    if tpl_modulo.exists():
+        pos_mod = gui.wait_for(str(tpl_modulo), timeout=4, confidence=0.75)
+        if pos_mod:
+            _ok(f"Ícone de módulo do Senior (HML) detectado em {pos_mod}. Clicando...")
+            gui.click(pos_mod[0], pos_mod[1])
+            time.sleep(2)
+
     _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s)...")
     pos_btn = gui.wait_for(str(tpl_btn), timeout=float(timeout), confidence=confidence)
 

@@ -46,6 +46,17 @@ def testar_login_senior(usuario: str = None, senha: str = None, tirar_print: boo
         except Exception as e:
             print(f"Aviso ao tirar screenshot: {e}")
 
+    # 1.5. Verifica se o ícone do módulo de homologação está na tela
+    icone_mod = templates_dir / "homologacao" / "icone_modulo.png"
+    if not icone_mod.exists():
+        icone_mod = templates_dir / "icone_modulo.png"
+    if icone_mod.exists():
+        pos_mod = gui.wait_for(str(icone_mod), timeout=3, confidence=0.75)
+        if pos_mod:
+            print(f"-> Ícone do módulo detectado em {pos_mod}. Clicando...")
+            gui.click(pos_mod[0], pos_mod[1])
+            time.sleep(2)
+
     # 2. Procura pelo botão Autenticar ou campo de login
     # Busca em homologacao primeiro, com fallback para raiz
     btn_template = templates_dir / "homologacao" / "botao_autenticar.png"
