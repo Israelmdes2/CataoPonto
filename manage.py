@@ -1016,52 +1016,37 @@ def automate_play(
 
 # ── Senior Automation Commands ─────────────────────────────
 def _disparar_senior(ambiente: str = "homologacao") -> bool:
-    import os
+    """
+    Dispara o executável Iniciar.exe do Senior diretamente com argumentos de módulo,
+    sem abrir pastas ou janelas do Explorer na frente.
+    """
     import subprocess
     from pathlib import Path
-    from core.config import settings
 
-    # 0. Tenta pelo executável/atalho configurado explicitamente no .env
-    caminho_env = (
-        settings.SENIOR_EXECUTAVEL_HML
-        if "homolog" in ambiente.lower()
-        else settings.SENIOR_EXECUTAVEL_PROD
-    ) or settings.SENIOR_EXECUTAVEL
-
-    if caminho_env and Path(caminho_env).exists():
-        try:
-            if str(caminho_env).lower().endswith(".lnk"):
-                subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Invoke-Item '{caminho_env}'"])
-            else:
-                subprocess.Popen([str(caminho_env)])
-            return True
-        except Exception:
-            pass
-
-    # 1. Tenta pelo atalho nativo da Área de Trabalho Pública
-    base_senior = Path(r"C:\Users\Public\Desktop\Senior")
-    termo = "homolog" if "homolog" in ambiente.lower() else "produ"
-    if base_senior.exists():
-        for atalho in base_senior.rglob("*Controle*Ponto*.lnk"):
-            if termo in str(atalho).lower():
-                try:
-                    os.startfile(str(atalho))
-                    return True
-                except Exception:
-                    pass
-
-    # 2. Tenta via rede UNC com shell=True
-    srv_dir = "Senior_HML" if "homolog" in ambiente.lower() else "Senior"
-    srv_host = "SRVVETORH-HML" if "homolog" in ambiente.lower() else "SRVVETORH"
-    senior_dir = r"C:\Senior-hml" if "homolog" in ambiente.lower() else r"C:\Senior"
-    exe = f"\\\\{srv_host}\\{srv_dir}\\Iniciar.exe"
+    # Fecha qualquer janela de pasta do Explorer que possa estar cobrindo a tela
     try:
-        subprocess.Popen(f'"{exe}" -SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\"', shell=True)
+        import pygetwindow as gw
+        for w in gw.getAllWindows():
+            if any(k in (w.title or '').lower() for k in ['vetorh homolog', 'vetorh produ', 'pasta senior']):
+                w.close()
+    except Exception:
+        pass
+
+    # Disparo direto do executável Iniciar.exe na rede com argumentos do módulo Ronda
+    is_hml = "homolog" in ambiente.lower()
+    srv_dir = "Senior_HML" if is_hml else "Senior"
+    srv_host = "SRVVETORH-HML" if is_hml else "SRVVETORH"
+    senior_dir = r"C:\Senior-hml" if is_hml else r"C:\Senior"
+    exe_unc = f"\\\\{srv_host}\\\\{srv_dir}\\Iniciar.exe"
+    args = f'-SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\\"'
+
+    try:
+        subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
         return True
     except Exception:
         pass
 
-    # 3. Tenta executável local
+    # Fallback para executável local se disponível
     exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
     if exe_local.exists():
         try:

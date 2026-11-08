@@ -193,47 +193,33 @@ class SeniorService:
             return False
 
     def abrir_sistema_senior(self, ambiente: str = "homologacao") -> bool:
-        """
-        PASSO 2:
-        1. Acessar a área de trabalho e abrir a pasta 'Senior';
-        2. Abrir a opção 'Controle de Ponto e Refeitório'.
-        """
-        logger.info(f"Iniciando abertura do sistema Senior ({ambiente})...")
+        """Dispara o Senior diretamente sem abrir pastas do Explorer."""
+        logger.info(f"Iniciando Senior ({ambiente}) diretamente pelo executável...")
+        is_hml = "homolog" in ambiente.lower()
+        srv_dir = "Senior_HML" if is_hml else "Senior"
+        srv_host = "SRVVETORH-HML" if is_hml else "SRVVETORH"
+        senior_dir = r"C:\Senior-hml" if is_hml else r"C:\Senior"
+        exe_unc = f"\\\\{srv_host}\\\\{srv_dir}\\Iniciar.exe"
+        args = f'-SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\\"'
 
-        # Prioridade 1: Executável configurado no .env por ambiente (HML ou PROD)
-        caminho_env = (
-            settings.SENIOR_EXECUTAVEL_HML
-            if "homolog" in ambiente.lower()
-            else settings.SENIOR_EXECUTAVEL_PROD
-        ) or settings.SENIOR_EXECUTAVEL
+        try:
+            subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
+            time.sleep(6)
+            self.focar_janela_senior()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao disparar Senior via UNC: {e}")
 
-        if caminho_env and Path(caminho_env).exists():
-            caminho = str(caminho_env)
-            logger.info(f"Executando Senior via caminho configurado ({ambiente}): {caminho}")
+        exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
+        if exe_local.exists():
             try:
-                if caminho.lower().endswith('.lnk'):
-                    subprocess.Popen(["powershell", "-NoProfile", "-Command", f"Invoke-Item '{caminho}'"])
-                else:
-                    subprocess.Popen([caminho])
+                subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
                 time.sleep(6)
-                # Em homologação, clica no ícone do módulo se aparecer na tela inicial
-                self._clicar_icone_modulo_se_necessario()
+                self.focar_janela_senior()
                 return True
             except Exception as e:
-                logger.error(f"Erro ao abrir Senior via caminho direto: {e}")
+                logger.error(f"Erro ao disparar Senior local: {e}")
 
-        # Tenta clicar no atalho da Área de Trabalho por imagem
-        sucesso_pasta = self._clicar_se_encontrar("pasta_senior.png", timeout=5, descricao="Pasta Senior na Área de Trabalho")
-        if sucesso_pasta:
-            time.sleep(2)
-            self._clicar_se_encontrar("modulo_ponto.png", timeout=5, descricao="Controle de Ponto e Refeitório")
-            time.sleep(5)
-            return True
-
-        logger.warning(
-            "Não foi possível abrir o Senior automaticamente por template visual. "
-            "Certifique-se de que a aplicação está aberta na tela ou configure SENIOR_EXECUTAVEL no .env."
-        )
         return False
 
     def autenticar_senior(self, usuario: Optional[str] = None, senha: Optional[str] = None) -> bool:
