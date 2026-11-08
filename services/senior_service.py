@@ -342,20 +342,23 @@ class SeniorService:
         y_barra_slider = pos_exec[1] + 10
         y_barra_trilho = pos_exec[1] + 120
         y_seta_baixo = pos_exec[1] + 156
-        # Coluna Descrição (onde fica o nome da opção):
-        x_coluna_nome = pos_exec[0] - 350
-        y_lista_meio = pos_exec[1] + 50
+
+        # Coordenadas calibradas da linha 702:
+        # dx_nome = -419 (centro de 'UnimedVA - Cartão Ponto Portal')
+        # dy_nome = +138 (última linha da grade)
+        x_coluna_nome = pos_exec[0] - 419
+        y_linha_702 = pos_exec[1] + 138
 
         # 2. Desce a lista obrigatoriamente até o final onde o modelo 702 se encontra
         logger.info("Descendo a barra de rolagem da grade até o final para exibir a opção 702...")
 
         # A) Clica no meio da grade para focar e envia PageDowns
         try:
-            gui.click(x_coluna_nome, y_lista_meio)
+            gui.click(x_coluna_nome, pos_exec[1] + 50)
             time.sleep(0.2)
             for _ in range(6):
                 gui.press("pagedown")
-                time.sleep(0.15)
+                time.sleep(0.12)
         except Exception as e:
             logger.debug(f"Aviso ao enviar teclas de rolagem: {e}")
 
@@ -368,36 +371,41 @@ class SeniorService:
             logger.debug(f"Aviso ao arrastar barra de rolagem: {e}")
 
         # C) Clica repetidamente na seta para baixo da barra de rolagem para garantir o fim absoluto
-        for _ in range(8):
+        for _ in range(12):
             gui.click(x_barra, y_seta_baixo)
-            time.sleep(0.1)
+            time.sleep(0.08)
 
-        time.sleep(0.5)
+        # Aguarda a renderização gráfica do Delphi estabilizar após a rolagem
+        time.sleep(0.8)
 
-        # 3. Localiza especificamente o NOME da opção 702 na tela
-        def _tentar_localizar_nome_702():
+        # 3. Localiza com alta precisão o NOME 'UnimedVA - Cartão Ponto Portal'
+        logger.info("Localizando o NOME da opção 702 ('UnimedVA - Cartão Ponto Portal')...")
+        pos_nome_702 = None
+        for tentativa in range(10):
             for tpl in [tpl_nome, tpl_texto_alt]:
                 if not tpl:
                     continue
-                for conf in [0.80, 0.72, 0.65]:
+                for conf in [0.85, 0.78, 0.70]:
                     p = gui.locate_center_on_screen(str(tpl), confidence=conf)
                     if p:
-                        return p
-            return None
+                        pos_nome_702 = p
+                        logger.info(f"NOME da opção 702 encontrado por visão computacional em {pos_nome_702} (confiança={conf})!")
+                        break
+                if pos_nome_702:
+                    break
+            if pos_nome_702:
+                break
+            time.sleep(0.3)
 
-        pos_nome_702 = _tentar_localizar_nome_702()
-
-        # 4. Fallback de coordenadas se o template matching não encontrar:
-        # No final da lista, o nome 'UnimedVA - Cartão Ponto Portal' fica na última linha
+        # 4. Fallback de coordenadas geométricas (dy = +138 da última linha):
         if not pos_nome_702:
-            logger.warning("Nome 702 não detectado por visão exata. Clicando na última linha da coluna Descrição...")
-            y_ultima_linha = pos_exec[1] + 130
-            pos_nome_702 = (x_coluna_nome, y_ultima_linha)
+            logger.warning(f"Nome 702 não detectado por visão exata. Clicando na última linha calibrada ({x_coluna_nome}, {y_linha_702})...")
+            pos_nome_702 = (x_coluna_nome, y_linha_702)
 
         # 5. Clica com precisão no NOME da opção 702 para selecioná-la
         logger.info(f"Clicando no NOME da opção 702 ('UnimedVA - Cartão Ponto Portal') em {pos_nome_702}...")
         gui.click(pos_nome_702[0], pos_nome_702[1])
-        time.sleep(0.3)
+        time.sleep(0.4)
         gui.click(pos_nome_702[0], pos_nome_702[1])
         time.sleep(0.8)
 
