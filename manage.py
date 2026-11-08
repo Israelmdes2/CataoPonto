@@ -1231,5 +1231,57 @@ def senior_calculos(
     _ok("Clique no menu 'Cálculos' realizado com sucesso!")
 
 
+@app.command("senior-click")
+def senior_click(
+    template: str = typer.Argument(..., help="Nome do template PNG (ex: menu_apuracao, menu_calculos)"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout de localização"),
+    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
+):
+    """Localiza e clica em qualquer template PNG cadastrado."""
+    import time
+    from pathlib import Path
+    from infrastructure.automation import gui
+
+    nome = template if template.endswith(".png") else f"{template}.png"
+    _sec(f"Senior Click: {nome} ({ambiente})")
+    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    templates_dir = Path("assets/templates")
+    prints_dir = Path(f"assets/prints/{amb_clean}")
+    prints_dir.mkdir(parents=True, exist_ok=True)
+
+    tpl = templates_dir / amb_clean / nome
+    if not tpl.exists():
+        tpl = templates_dir / nome
+
+    if not tpl.exists():
+        _err(f"Template visual '{nome}' não encontrado em '{templates_dir / amb_clean}' nem na raiz.")
+        raise typer.Exit(1)
+
+    _info(f"Localizando '{nome}' na tela (timeout: {timeout}s)...")
+    pos = gui.wait_for(str(tpl), timeout=float(timeout), confidence=confidence)
+    if not pos:
+        screenshot_fail = prints_dir / f"erro_{template}_nao_encontrado.png"
+        try:
+            gui.screenshot(save_to=str(screenshot_fail))
+            _warn(f"Elemento não encontrado. Print salvo em: {screenshot_fail}")
+        except Exception:
+            pass
+        _err(f"Elemento '{nome}' não encontrado na tela.")
+        raise typer.Exit(1)
+
+    _ok(f"Elemento '{nome}' encontrado em {pos}. Clicando...")
+    gui.click(pos[0], pos[1])
+    time.sleep(1)
+
+    print_apos = prints_dir / f"apos_clique_{template}.png"
+    try:
+        gui.screenshot(save_to=str(print_apos))
+        _ok(f"Print salvo em: {print_apos}")
+    except Exception:
+        pass
+    _ok(f"Clique em '{nome}' executado com sucesso!")
+
+
 if __name__ == "__main__":
     app()

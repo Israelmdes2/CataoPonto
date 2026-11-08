@@ -9,8 +9,12 @@
 # 3. Clicar no menu Cálculos (com Senior já logado e aberto)
 .venv\Scripts\python.exe manage.py senior-calculos
 
-# 4. Apenas disparar o atalho do Senior (Homologação)
+# 4. Clicar em qualquer elemento/menu por template (ex: menu_apuracao, menu_calculos, icone_modulo)
+.venv\Scripts\python.exe manage.py senior-click menu_apuracao
+.venv\Scripts\python.exe manage.py senior-click menu_calculos
+
+# 5. Apenas disparar o atalho do Senior (Homologação)
 .venv\Scripts\python.exe manage.py senior-open --ambiente homologacao
 
-# 5. Executar os testes unitários do robô
+# 6. Executar os testes unitários do robô
 .venv\Scripts\python.exe -m pytest
