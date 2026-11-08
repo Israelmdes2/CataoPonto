@@ -1023,14 +1023,7 @@ def _disparar_senior(ambiente: str = "homologacao") -> bool:
     import subprocess
     from pathlib import Path
 
-    # Fecha qualquer janela de pasta do Explorer que possa estar cobrindo a tela
-    try:
-        import pygetwindow as gw
-        for w in gw.getAllWindows():
-            if any(k in (w.title or '').lower() for k in ['vetorh homolog', 'vetorh produ', 'pasta senior']):
-                w.close()
-    except Exception:
-        pass
+# Inicia diretamente sem fechar nenhuma janela do sistema
 
     # Disparo direto do executável Iniciar.exe na rede com argumentos do módulo Ronda
     is_hml = "homolog" in ambiente.lower()
@@ -1171,7 +1164,6 @@ def senior_login(
     _info("Clicando no botão 'Autenticar'...")
     gui.click(pos_btn[0], pos_btn[1])
     time.sleep(1)
-    gui.press("enter")
 
     _info("Aguardando autenticação e carregamento do sistema Senior...")
     login_fechou = False
