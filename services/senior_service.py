@@ -648,64 +648,64 @@ class SeniorService:
         """
         Garante que o campo 'Tipo:' do modal 'Salvar como' seja alterado
         de 'Arquivos Impressos (*.imp)' para 'Arquivo PDF (*.pdf)'.
-        Utiliza visão computacional, clique no dropdown e validação estrita.
+        Utiliza visão computacional com o template real do item dropdown e validação estrita.
         """
         tpl_combo_imp = self._obter_template("combo_tipo_imp.png")
         tpl_lbl_tipo = self._obter_template("label_tipo.png")
-
-        # 1. Localiza a combobox de Tipo
-        pos_combo = None
-        if tpl_combo_imp:
-            pos_combo = gui.locate_center_on_screen(str(tpl_combo_imp), confidence=0.75)
-
-        if not pos_combo and tpl_lbl_tipo:
-            pos_lbl = gui.locate_center_on_screen(str(tpl_lbl_tipo), confidence=0.75)
-            if pos_lbl:
-                # A combobox fica ~110px à direita do label 'Tipo:'
-                pos_combo = (pos_lbl[0] + 110, pos_lbl[1])
+        tpl_item_pdf = self._obter_template("item_dropdown_pdf_real.png")
 
         for tentativa in range(1, 4):
             logger.info(f"Tentativa {tentativa} de selecionar Tipo 'Arquivo PDF (*.pdf)'...")
 
+            # 1. Se o dropdown já estiver aberto e o item for visível na tela, clica direto nele!
+            if tpl_item_pdf:
+                pos_direto = gui.locate_center_on_screen(str(tpl_item_pdf), confidence=0.72)
+                if pos_direto:
+                    logger.info(f"Item 'Arquivo PDF (*.pdf)' já visível na tela em {pos_direto}! Clicando...")
+                    gui.click(pos_direto[0], pos_direto[1])
+                    time.sleep(0.5)
+                    # Verifica se o .imp sumiu
+                    if not (tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75)):
+                        logger.info("VALIDADO: Tipo 'Arquivo PDF (*.pdf)' selecionado com sucesso!")
+                        return True
+
+            # 2. Localiza a combobox de Tipo
+            pos_combo = None
+            if tpl_combo_imp:
+                pos_combo = gui.locate_center_on_screen(str(tpl_combo_imp), confidence=0.75)
+
+            if not pos_combo and tpl_lbl_tipo:
+                pos_lbl = gui.locate_center_on_screen(str(tpl_lbl_tipo), confidence=0.75)
+                if pos_lbl:
+                    pos_combo = (pos_lbl[0] + 110, pos_lbl[1])
+
             if pos_combo:
-                # Método A: Clique físico no combobox para abrir o dropdown
-                logger.info(f"Clicando na combobox do Tipo em {pos_combo} para abrir a lista suspensa...")
+                # Clica na combobox para abrir a lista suspensa
+                logger.info(f"Clicando na combobox do Tipo em {pos_combo} para abrir o dropdown...")
                 gui.click(pos_combo[0], pos_combo[1])
-                time.sleep(0.4)
-
-                # Com o dropdown aberto, clica na opção PDF logo abaixo (~22px para baixo)
-                x_pdf = pos_combo[0]
-                y_pdf = pos_combo[1] + 24
-                logger.info(f"Clicando na opção 'Arquivo PDF (*.pdf)' em ({x_pdf}, {y_pdf})...")
-                gui.click(x_pdf, y_pdf)
                 time.sleep(0.5)
 
-            # Método B de reforço: se ainda estiver exibindo .imp, aciona atalhos do Windows
-            if tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75):
-                logger.info("Tipo ainda em .imp. Acionando atalhos nativos: Alt+T -> F4 -> Down -> Enter...")
-                gui.hotkey("alt", "t")
-                time.sleep(0.3)
-                gui.press("f4")  # Expande dropdown
-                time.sleep(0.3)
-                gui.press("down")
-                time.sleep(0.3)
-                gui.press("enter")
-                time.sleep(0.5)
+                # Com o dropdown aberto, procura o item 'Arquivo PDF (*.pdf)' por imagem
+                pos_item = None
+                if tpl_item_pdf:
+                    pos_item = gui.locate_center_on_screen(str(tpl_item_pdf), confidence=0.70)
 
-            # Método C: Digitar 'a' duas vezes ou 'p'
-            if tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75):
-                logger.info("Tentando seleção via tecla 'p'...")
-                gui.hotkey("alt", "t")
-                time.sleep(0.3)
-                gui.press("p")
-                time.sleep(0.2)
-                gui.press("enter")
-                time.sleep(0.5)
+                if pos_item:
+                    logger.info(f"Opção 'Arquivo PDF (*.pdf)' detectada no dropdown em: {pos_item}! Clicando...")
+                    gui.click(pos_item[0], pos_item[1])
+                    time.sleep(0.5)
+                else:
+                    # Fallback com dropdown aberto: tecla seta para baixo e Enter
+                    logger.info("Opção no dropdown não detectada por template. Acionando tecla Down + Enter...")
+                    gui.press("down")
+                    time.sleep(0.3)
+                    gui.press("enter")
+                    time.sleep(0.5)
 
-            # VALIDAÇÃO VISUAL: Se combo_tipo_imp NÃO estiver mais visível, foi alterado!
+            # 3. Validação visual: o texto '.imp' não pode mais estar visível na combobox
             if tpl_combo_imp:
                 if not gui.is_visible(str(tpl_combo_imp), confidence=0.75):
-                    logger.info("VALIDAÇÃO CONCLUÍDA: O campo Tipo foi alterado com sucesso para 'Arquivo PDF (*.pdf)'!")
+                    logger.info("VALIDAÇÃO CONCLUÍDA: O campo Tipo agora é 'Arquivo PDF (*.pdf)'!")
                     return True
                 else:
                     logger.warning(f"Tentativa {tentativa}: O campo Tipo ainda exibe 'Arquivos Impressos (*.imp)'.")
