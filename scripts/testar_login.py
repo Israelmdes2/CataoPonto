@@ -47,8 +47,14 @@ def testar_login_senior(usuario: str = None, senha: str = None, tirar_print: boo
             print(f"Aviso ao tirar screenshot: {e}")
 
     # 2. Procura pelo botão Autenticar ou campo de login
-    btn_template = templates_dir / "botao_autenticar.png"
-    login_template = templates_dir / "campo_login.png"
+    # Busca em homologacao primeiro, com fallback para raiz
+    btn_template = templates_dir / "homologacao" / "botao_autenticar.png"
+    if not btn_template.exists():
+        btn_template = templates_dir / "botao_autenticar.png"
+
+    login_template = templates_dir / "homologacao" / "campo_login.png"
+    if not login_template.exists():
+        login_template = templates_dir / "campo_login.png"
 
     print("Procurando tela de login do Senior por correspondência de imagem...")
     pos_btn = None

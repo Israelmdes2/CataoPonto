@@ -1105,13 +1105,19 @@ def senior_login(
         _err("Usuário não configurado! Passe --user ou defina SENIOR_LOGIN no .env")
         raise typer.Exit(1)
 
+    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
     templates_dir = Path("assets/templates")
-    prints_dir = Path("assets/prints")
+    prints_dir = Path(f"assets/prints/{amb_clean}")
     prints_dir.mkdir(parents=True, exist_ok=True)
 
-    tpl_btn = templates_dir / "botao_autenticar.png"
+    # 1. Busca primeiro na pasta específica do ambiente (ex: assets/templates/homologacao/)
+    tpl_btn = templates_dir / amb_clean / "botao_autenticar.png"
+    # 2. Se não encontrar, tenta na raiz (assets/templates/)
     if not tpl_btn.exists():
-        _err(f"Template visual '{tpl_btn}' não encontrado.")
+        tpl_btn = templates_dir / "botao_autenticar.png"
+
+    if not tpl_btn.exists():
+        _err(f"Template visual 'botao_autenticar.png' não encontrado em '{templates_dir / amb_clean}' nem em '{templates_dir}'.")
         raise typer.Exit(1)
 
     _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s)...")

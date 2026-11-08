@@ -22,7 +22,8 @@ def _subtrair_meses(ano: int, mes: int, meses_a_subtrair: int) -> Tuple[int, int
 
 
 class SeniorService:
-    def __init__(self):
+    def __init__(self, ambiente: str = "homologacao"):
+        self.ambiente = "homologacao" if "homolog" in ambiente.lower() else "producao"
         self.templates_dir = Path(settings.SENIOR_TEMPLATES_DIR)
         self.confidence = settings.SENIOR_CONFIDENCE
         self.templates_dir.mkdir(parents=True, exist_ok=True)
@@ -69,10 +70,17 @@ class SeniorService:
         )
 
     def _obter_template(self, nome_arquivo: str) -> Optional[Path]:
-        """Verifica se o template visual PNG existe na pasta de assets."""
-        caminho = self.templates_dir / nome_arquivo
-        if caminho.exists():
-            return caminho
+        """
+        Verifica se o template visual PNG existe:
+        1. Prioridade: pasta específica do ambiente (assets/templates/{ambiente}/)
+        2. Fallback: pasta raiz de templates (assets/templates/)
+        """
+        caminho_amb = self.templates_dir / self.ambiente / nome_arquivo
+        if caminho_amb.exists():
+            return caminho_amb
+        caminho_raiz = self.templates_dir / nome_arquivo
+        if caminho_raiz.exists():
+            return caminho_raiz
         return None
 
     def _clicar_se_encontrar(self, nome_template: str, timeout: int = 10, descricao: str = "") -> bool:
