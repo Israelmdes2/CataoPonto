@@ -306,8 +306,8 @@ class SeniorService:
         """
         PASSO 5:
         1. Aguardar a janela 'Seleção de Modelos para Execução';
-        2. Rolar a grade até o final para exibir a opção 702;
-        3. Clicar especificamente no NOME 'UnimedVA - Cartão Ponto Portal';
+        2. Rolar a grade até encontrar estritamente o modelo 702 ('UnimedVA - Cartão Ponto Portal');
+        3. Clicar no NOME da opção 702 com alta precisão visual (sem falsos positivos);
         4. Clicar no botão 'Executar'.
         """
         logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
@@ -315,8 +315,8 @@ class SeniorService:
         # 1. Aguarda a janela abrir (identificada pelo botão Executar ou pelo Título)
         tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
         tpl_exec = self._obter_template("botao_executar.png")
-        tpl_nome = self._obter_template("nome_opcao_702.png")
-        tpl_texto_alt = self._obter_template("texto_cartao_ponto_portal.png")
+        tpl_702_oficial = self._obter_template("opcao_702_oficial.png")
+        tpl_nome_oficial = self._obter_template("nome_702_oficial.png")
 
         pos_exec = None
         if tpl_exec:
@@ -336,99 +336,75 @@ class SeniorService:
 
         logger.info(f"Janela de Modelos aberta! Botão Executar em: {pos_exec}")
 
-        # Coordenadas calibradas da barra de rolagem e do nome
-        # Offset medido em 1080p: dx = -57, dy_seta = +156
-        x_barra = pos_exec[0] - 57
-        y_barra_slider = pos_exec[1] + 10
-        y_barra_trilho = pos_exec[1] + 120
+        # Coordenadas da seta para baixo da barra de rolagem (SÓ DESCE, NUNCA SOBE)
+        x_seta_baixo = pos_exec[0] - 57
         y_seta_baixo = pos_exec[1] + 156
 
-        # Coordenadas calibradas da linha 702:
-        # dx_nome = -419 (centro de 'UnimedVA - Cartão Ponto Portal')
-        # dy_nome = +138 (última linha da grade)
-        x_coluna_nome = pos_exec[0] - 419
-        y_linha_702 = pos_exec[1] + 138
+        # Centro da grade para focar
+        x_grade = pos_exec[0] - 350
+        y_grade = pos_exec[1] + 60
 
-        # 2. Desce a lista obrigatoriamente até o final onde o modelo 702 se encontra
-        logger.info("Descendo a barra de rolagem da grade até o final para exibir a opção 702...")
-
-        # A) Clica no meio da grade para focar e envia PageDowns
-        try:
-            gui.click(x_coluna_nome, pos_exec[1] + 50)
-            time.sleep(0.2)
-            for _ in range(6):
-                gui.press("pagedown")
-                time.sleep(0.12)
-        except Exception as e:
-            logger.debug(f"Aviso ao enviar teclas de rolagem: {e}")
-
-        # B) Arrasta o slider da barra de rolagem para o final
-        try:
-            gui.move_to(x_barra, y_barra_slider, duration=0.15)
-            gui.drag_to(x_barra, y_barra_trilho, duration=0.5)
-            time.sleep(0.3)
-        except Exception as e:
-            logger.debug(f"Aviso ao arrastar barra de rolagem: {e}")
-
-        # C) Clica repetidamente na seta para baixo da barra de rolagem para garantir o fim absoluto
-        for _ in range(12):
-            gui.click(x_barra, y_seta_baixo)
-            time.sleep(0.08)
-
-        # Aguarda a renderização gráfica do Delphi estabilizar após a rolagem
-        time.sleep(0.8)
-
-        # 3. Localiza com alta precisão o NOME 'UnimedVA - Cartão Ponto Portal'
-        logger.info("Localizando o NOME da opção 702 ('UnimedVA - Cartão Ponto Portal')...")
-        pos_nome_702 = None
-        for tentativa in range(10):
-            for tpl in [tpl_nome, tpl_texto_alt]:
+        def _buscar_702_estrito():
+            """Busca estritamente o template oficial com alta confiança (sem sensibilidade / sem falsos positivos)."""
+            for tpl in [tpl_702_oficial, tpl_nome_oficial]:
                 if not tpl:
                     continue
-                for conf in [0.85, 0.78, 0.70]:
+                # Confiança alta: no topo da tela dá ~0.44, na opção 702 dá ~0.95
+                for conf in [0.88, 0.82]:
                     p = gui.locate_center_on_screen(str(tpl), confidence=conf)
                     if p:
-                        pos_nome_702 = p
-                        logger.info(f"NOME da opção 702 encontrado por visão computacional em {pos_nome_702} (confiança={conf})!")
-                        break
-                if pos_nome_702:
+                        return p, tpl
+            return None, None
+
+        # 2. Foca na grade de modelos com 1 clique inicial
+        gui.click(x_grade, y_grade)
+        time.sleep(0.3)
+
+        # 3. Loop de rolagem unidirecional: rola para baixo até o 702 aparecer
+        pos_702 = None
+        qual_tpl = None
+
+        logger.info("Verificando se opção 702 já está visível ou descendo a grade...")
+        # Checagem inicial
+        pos_702, qual_tpl = _buscar_702_estrito()
+
+        if not pos_702:
+            # Desce com passos rápidos na seta inferior e no scroll, verificando a cada etapa
+            for ciclo in range(20):
+                # Clica 3 vezes na seta para baixo da barra de rolagem (garante descida unidirecional)
+                for _ in range(3):
+                    gui.click(x_seta_baixo, y_seta_baixo)
+                    time.sleep(0.04)
+
+                time.sleep(0.15)
+                pos_702, qual_tpl = _buscar_702_estrito()
+                if pos_702:
+                    logger.info(f"Opção 702 localizada com sucesso no ciclo de rolagem {ciclo + 1} em {pos_702}!")
                     break
-            if pos_nome_702:
-                break
-            time.sleep(0.3)
 
-        # 4. Fallback de coordenadas geométricas (dy = +138 da última linha):
-        if not pos_nome_702:
-            logger.warning(f"Nome 702 não detectado por visão exata. Clicando na última linha calibrada ({x_coluna_nome}, {y_linha_702})...")
-            pos_nome_702 = (x_coluna_nome, y_linha_702)
+        if not pos_702:
+            logger.warning("Opção 702 ('UnimedVA - Cartão Ponto Portal') NÃO encontrada após rolagem completa.")
+            return False
 
-        # 5. Clica com precisão no NOME da opção 702 para selecioná-la
-        logger.info(f"Clicando no NOME da opção 702 ('UnimedVA - Cartão Ponto Portal') em {pos_nome_702}...")
-        gui.click(pos_nome_702[0], pos_nome_702[1])
-        time.sleep(0.4)
-        gui.click(pos_nome_702[0], pos_nome_702[1])
+        # 4. Calcula o ponto exato do clique no NOME 'UnimedVA - Cartão Ponto Portal'
+        # Se achou pelo template completo (que tem o '702' à esquerda), desloca +35px para clicar no nome
+        if qual_tpl and "opcao_702_oficial" in str(qual_tpl):
+            x_nome = pos_702[0] + 35
+            y_nome = pos_702[1]
+        else:
+            x_nome = pos_702[0]
+            y_nome = pos_702[1]
+
+        logger.info(f"Clicando com precisão no NOME da opção 702 em ({x_nome}, {y_nome})...")
+        gui.click(x_nome, y_nome)
+        time.sleep(0.3)
+        gui.click(x_nome, y_nome)
         time.sleep(0.8)
 
-        # Salva print da opção selecionada para auditoria
-        try:
-            print_702 = self.prints_dir / "05_opcao_702_selecionada.png"
-            gui.screenshot(save_to=str(print_702))
-            logger.info(f"Print pós-seleção do nome do 702 salvo em: {print_702}")
-        except Exception:
-            pass
-
-        # 6. Clica no botão Executar
-        logger.info(f"Opção 702 selecionada com sucesso! Clicando no botão Executar em {pos_exec}...")
+        # 5. Clica no botão Executar
+        logger.info(f"Clicando no botão Executar em {pos_exec}...")
         gui.click(pos_exec[0], pos_exec[1])
         time.sleep(3)
-
-        # Salva print pós-Executar para auditoria do Passo 6
-        try:
-            print_pos_exec = self.prints_dir / "06_tela_parametros_datas.png"
-            gui.screenshot(save_to=str(print_pos_exec))
-            logger.info(f"Print pós-Executar salvo em: {print_pos_exec}")
-        except Exception:
-            pass
 
         logger.info("Passo 5 executado com sucesso!")
         return True
