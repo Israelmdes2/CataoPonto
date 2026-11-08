@@ -1283,5 +1283,65 @@ def senior_click(
     _ok(f"Clique em '{nome}' executado com sucesso!")
 
 
+@app.command("senior-menu-cartao")
+def senior_menu_cartao(
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout_passo: int = typer.Option(6, "--timeout", "-t", help="Timeout para cada clique de menu"),
+    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
+):
+    """Executa a navegação completa dos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
+    import time
+    from pathlib import Path
+    from infrastructure.automation import gui
+
+    _sec(f"Navegação Senior: Menu Completo Cartão Ponto ({ambiente})")
+    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    templates_dir = Path("assets/templates")
+    prints_dir = Path(f"assets/prints/{amb_clean}")
+    prints_dir.mkdir(parents=True, exist_ok=True)
+
+    passos = [
+        ("menu_calculos.png", "Cálculos"),
+        ("menu_apuracao.png", "Apuração"),
+        ("menu_listar.png", "Listar"),
+        ("menu_cartao_ponto.png", "Cartão Ponto"),
+    ]
+
+    for arquivo, desc in passos:
+        tpl = templates_dir / amb_clean / arquivo
+        if not tpl.exists():
+            tpl = templates_dir / arquivo
+
+        if not tpl.exists():
+            _err(f"Template visual '{arquivo}' não encontrado.")
+            raise typer.Exit(1)
+
+        _info(f"Localizando menu '{desc}' ({arquivo})...")
+        pos = gui.wait_for(str(tpl), timeout=float(timeout_passo), confidence=confidence)
+        if not pos:
+            screenshot_fail = prints_dir / f"erro_menu_{arquivo}"
+            try:
+                gui.screenshot(save_to=str(screenshot_fail))
+                _warn(f"Print de falha salvo em: {screenshot_fail}")
+            except Exception:
+                pass
+            _err(f"Menu '{desc}' não encontrado na tela.")
+            raise typer.Exit(1)
+
+        _ok(f"Menu '{desc}' encontrado em {pos}. Clicando...")
+        gui.click(pos[0], pos[1])
+        time.sleep(1)
+
+    time.sleep(2)
+    print_tela = prints_dir / "04_tela_relatorio_702.png"
+    try:
+        gui.screenshot(save_to=str(print_tela))
+        _ok(f"Print da tela aberta (Passo 5) salvo em: {print_tela}")
+    except Exception:
+        pass
+
+    _ok("Navegação completa até o Cartão Ponto realizada com sucesso!")
+
+
 if __name__ == "__main__":
     app()

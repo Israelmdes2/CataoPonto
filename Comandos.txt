@@ -6,14 +6,14 @@
 # 2. Login no Senior sem disparar o atalho (caso já esteja com a tela aberta)
 .venv\Scripts\python.exe manage.py senior-login --no-abrir
 
-# 3. Clicar no menu Cálculos (com Senior já logado e aberto)
-.venv\Scripts\python.exe manage.py senior-calculos
+# 3. Navegação completa dos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto
+.venv\Scripts\python.exe manage.py senior-menu-cartao
 
-# 4. Clicar em qualquer elemento/menu por template
-.venv\Scripts\python.exe manage.py senior-click menu_calculos
-.venv\Scripts\python.exe manage.py senior-click menu_apuracao
+# 4. Clicar em qualquer elemento/menu individualmente
+.venv\Scripts\python.exe manage.py senior-click menu_cartao_ponto
 .venv\Scripts\python.exe manage.py senior-click menu_listar
-.venv\Scripts\python.exe manage.py senior-click icone_modulo
+.venv\Scripts\python.exe manage.py senior-click menu_apuracao
+.venv\Scripts\python.exe manage.py senior-click menu_calculos
 
 # 5. Apenas disparar o atalho do Senior (Homologação)
 .venv\Scripts\python.exe manage.py senior-open --ambiente homologacao
