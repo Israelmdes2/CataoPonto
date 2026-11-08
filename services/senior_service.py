@@ -304,18 +304,16 @@ class SeniorService:
         """
         PASSO 5:
         1. Aguardar a janela 'Seleção de Modelos para Execução';
-        2. Descer a barra de rolagem até encontrar a opção 702 ('UnimedVA - Cartão Ponto Portal');
-        3. Clicar especificamente no NOME da opção 702 para torná-la ativa;
+        2. Rolar a grade até o final para exibir a opção 702;
+        3. Clicar especificamente no NOME 'UnimedVA - Cartão Ponto Portal';
         4. Clicar no botão 'Executar'.
         """
         logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
 
         # 1. Aguarda a janela abrir (identificada pelo botão Executar ou pelo Título)
-        # Atenção: NÃO chamar focar_janela_senior() aqui para não ativar a janela mãe e minimizar o modal!
         tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
         tpl_exec = self._obter_template("botao_executar.png")
         tpl_nome = self._obter_template("nome_opcao_702.png")
-        tpl_702 = self._obter_template("codigo_702.png")
         tpl_texto_alt = self._obter_template("texto_cartao_ponto_portal.png")
 
         pos_exec = None
@@ -330,14 +328,6 @@ class SeniorService:
                 if not pos_exec:
                     pos_exec = (pos_tit[0] + 510, pos_tit[1] + 35)
 
-        # Fallback de foco: só tenta focar se a janela não estiver visível na tela
-        if not pos_exec:
-            logger.info("Tentando focar especificamente a janela 'Seleção de Modelos'...")
-            gui.focar_janela("seleção de modelos")
-            time.sleep(1)
-            if tpl_exec:
-                pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
-
         if not pos_exec:
             logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada após timeout.")
             return False
@@ -345,77 +335,64 @@ class SeniorService:
         logger.info(f"Janela de Modelos aberta! Botão Executar em: {pos_exec}")
 
         # Coordenadas calibradas da barra de rolagem e do nome
-        x_barra = pos_exec[0] - 58
-        y_barra_topo = pos_exec[1]
-        y_barra_fundo = pos_exec[1] + 130
-        y_seta_baixo = pos_exec[1] + 142
-        # Centro da coluna 'Descrição' (onde fica o nome da opção):
+        # Offset medido em 1080p: dx = -57, dy_seta = +156
+        x_barra = pos_exec[0] - 57
+        y_barra_slider = pos_exec[1] + 10
+        y_barra_trilho = pos_exec[1] + 120
+        y_seta_baixo = pos_exec[1] + 156
+        # Coluna Descrição (onde fica o nome da opção):
         x_coluna_nome = pos_exec[0] - 350
-        y_lista = pos_exec[1] + 50
+        y_lista_meio = pos_exec[1] + 50
 
+        # 2. Desce a lista obrigatoriamente até o final onde o modelo 702 se encontra
+        logger.info("Descendo a barra de rolagem da grade até o final para exibir a opção 702...")
+
+        # A) Clica no meio da grade para focar e envia PageDowns
+        try:
+            gui.click(x_coluna_nome, y_lista_meio)
+            time.sleep(0.2)
+            for _ in range(6):
+                gui.press("pagedown")
+                time.sleep(0.15)
+        except Exception as e:
+            logger.debug(f"Aviso ao enviar teclas de rolagem: {e}")
+
+        # B) Arrasta o slider da barra de rolagem para o final
+        try:
+            gui.move_to(x_barra, y_barra_slider, duration=0.15)
+            gui.drag_to(x_barra, y_barra_trilho, duration=0.5)
+            time.sleep(0.3)
+        except Exception as e:
+            logger.debug(f"Aviso ao arrastar barra de rolagem: {e}")
+
+        # C) Clica repetidamente na seta para baixo da barra de rolagem para garantir o fim absoluto
+        for _ in range(8):
+            gui.click(x_barra, y_seta_baixo)
+            time.sleep(0.1)
+
+        time.sleep(0.5)
+
+        # 3. Localiza especificamente o NOME da opção 702 na tela
         def _tentar_localizar_nome_702():
-            # Prioridade 1: Buscar o template do nome recortado diretamente da tela
-            for tpl in [tpl_nome, tpl_702, tpl_texto_alt]:
+            for tpl in [tpl_nome, tpl_texto_alt]:
                 if not tpl:
                     continue
-                for conf in [0.80, 0.72, 0.65, 0.58]:
+                for conf in [0.80, 0.72, 0.65]:
                     p = gui.locate_center_on_screen(str(tpl), confidence=conf)
                     if p:
                         return p
             return None
 
-        # 2. Verifica se o nome da opção 702 já está visível de início
         pos_nome_702 = _tentar_localizar_nome_702()
 
-        # 3. Se ainda não estiver visível, rola a barra de rolagem até o final
-        if not pos_nome_702:
-            logger.info("Opção 702 ainda não visível no topo. Rolando a barra de rolagem para o final...")
-            try:
-                gui.move_to(x_barra, y_barra_topo, duration=0.2)
-                gui.drag_to(x_barra, y_barra_fundo, duration=0.6)
-                time.sleep(0.5)
-            except Exception as e:
-                logger.debug(f"Falha ao arrastar barra de rolagem: {e}")
-
-            pos_nome_702 = _tentar_localizar_nome_702()
-
-        # Estratégia 2: Clica no trilho inferior da barra de rolagem e na seta para baixo
-        if not pos_nome_702:
-            logger.info("Clicando no trilho inferior da barra de rolagem e na seta para baixo...")
-            for _ in range(6):
-                gui.click(x_barra, y_barra_fundo)
-                time.sleep(0.2)
-                gui.click(x_barra, y_seta_baixo)
-                time.sleep(0.2)
-                pos_nome_702 = _tentar_localizar_nome_702()
-                if pos_nome_702:
-                    break
-
-        # Estratégia 3: Foca na lista e usa teclas PageDown / Down
-        if not pos_nome_702:
-            logger.info("Focando na lista para enviar teclas PageDown / Down...")
-            gui.click(x_coluna_nome, y_lista)
-            time.sleep(0.3)
-            for _ in range(10):
-                gui.press("pagedown")
-                time.sleep(0.25)
-                pos_nome_702 = _tentar_localizar_nome_702()
-                if pos_nome_702:
-                    break
-                gui.press("down")
-                time.sleep(0.15)
-                pos_nome_702 = _tentar_localizar_nome_702()
-                if pos_nome_702:
-                    break
-
-        # 4. Fallback de Seleção se a lista já estiver totalmente no final:
+        # 4. Fallback de coordenadas se o template matching não encontrar:
         # No final da lista, o nome 'UnimedVA - Cartão Ponto Portal' fica na última linha
         if not pos_nome_702:
-            logger.warning("Nome 702 não detectado por visão exata. Clicando na última linha da coluna Nome...")
-            y_ultima_linha = pos_exec[1] + 120
+            logger.warning("Nome 702 não detectado por visão exata. Clicando na última linha da coluna Descrição...")
+            y_ultima_linha = pos_exec[1] + 130
             pos_nome_702 = (x_coluna_nome, y_ultima_linha)
 
-        # 5. Clica especificamente no NOME da opção 702
+        # 5. Clica com precisão no NOME da opção 702 para selecioná-la
         logger.info(f"Clicando no NOME da opção 702 ('UnimedVA - Cartão Ponto Portal') em {pos_nome_702}...")
         gui.click(pos_nome_702[0], pos_nome_702[1])
         time.sleep(0.3)
