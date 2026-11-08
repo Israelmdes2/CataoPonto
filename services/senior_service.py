@@ -249,7 +249,9 @@ class SeniorService:
                 time.sleep(0.5)
                 gui.hotkey("ctrl", "a")
                 gui.press("backspace")
-                gui.type_text(user)
+                import pyperclip
+                pyperclip.copy(user.lower())
+                gui.hotkey("ctrl", "v")
                 gui.press("tab")
                 time.sleep(0.5)
                 gui.type_text(password)

@@ -1152,7 +1152,9 @@ def senior_login(
 
     gui.hotkey("ctrl", "a")
     gui.press("backspace")
-    gui.type_text(user)
+    import pyperclip
+    pyperclip.copy(user.lower())
+    gui.hotkey("ctrl", "v")
     _ok(f"Usuário '{user}' inserido.")
 
     gui.press("tab")
