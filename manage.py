@@ -1007,6 +1007,24 @@ def _disparar_senior(ambiente: str = "homologacao") -> bool:
     import os
     import subprocess
     from pathlib import Path
+    from core.config import settings
+
+    # 0. Tenta pelo executável/atalho configurado explicitamente no .env
+    caminho_env = (
+        settings.SENIOR_EXECUTAVEL_HML
+        if "homolog" in ambiente.lower()
+        else settings.SENIOR_EXECUTAVEL_PROD
+    ) or settings.SENIOR_EXECUTAVEL
+
+    if caminho_env and Path(caminho_env).exists():
+        try:
+            if str(caminho_env).lower().endswith(".lnk"):
+                os.startfile(str(caminho_env))
+            else:
+                subprocess.Popen([str(caminho_env)])
+            return True
+        except Exception:
+            pass
 
     # 1. Tenta pelo atalho nativo da Área de Trabalho Pública
     base_senior = Path(r"C:\Users\Public\Desktop\Senior")

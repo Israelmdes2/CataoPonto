@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     PLANILHA_COLABORADORES_PATH: str = r"C:\Digitaly\EnvioCartaoPonto\data\colaboradores.xlsx"
 
     # Senior Desktop (Automação por Imagem)
-    SENIOR_EXECUTAVEL: Optional[str] = None
+    SENIOR_EXECUTAVEL_HML: Optional[str] = None
+    SENIOR_EXECUTAVEL_PROD: Optional[str] = None
+    SENIOR_EXECUTAVEL: Optional[str] = None  # Retrocompatibilidade
     SENIOR_PASTA_ATALHO: str = "Senior"
     SENIOR_NOME_MODULO: str = "Controle de Ponto e Refeitório"
     SENIOR_LOGIN: str = ""

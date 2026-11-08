@@ -102,18 +102,24 @@ class SeniorService:
             logger.error(f"Erro ao tentar localizar visualmente '{desc}': {e}")
             return False
 
-    def abrir_sistema_senior(self) -> bool:
+    def abrir_sistema_senior(self, ambiente: str = "homologacao") -> bool:
         """
         PASSO 2:
         1. Acessar a área de trabalho e abrir a pasta 'Senior';
         2. Abrir a opção 'Controle de Ponto e Refeitório'.
         """
-        logger.info("Iniciando abertura do sistema Senior...")
+        logger.info(f"Iniciando abertura do sistema Senior ({ambiente})...")
 
-        # Se houver executável direto configurado no .env
-        if settings.SENIOR_EXECUTAVEL and Path(settings.SENIOR_EXECUTAVEL).exists():
-            caminho = str(settings.SENIOR_EXECUTAVEL)
-            logger.info(f"Executando Senior via caminho configurado: {caminho}")
+        # Prioridade 1: Executável configurado no .env por ambiente (HML ou PROD)
+        caminho_env = (
+            settings.SENIOR_EXECUTAVEL_HML
+            if "homolog" in ambiente.lower()
+            else settings.SENIOR_EXECUTAVEL_PROD
+        ) or settings.SENIOR_EXECUTAVEL
+
+        if caminho_env and Path(caminho_env).exists():
+            caminho = str(caminho_env)
+            logger.info(f"Executando Senior via caminho configurado ({ambiente}): {caminho}")
             try:
                 if caminho.lower().endswith('.lnk'):
                     os.startfile(caminho)
