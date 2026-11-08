@@ -1422,6 +1422,28 @@ def senior_valores_entrada(
         raise typer.Exit(1)
 
 
+@app.command("senior-aguardar-salvar")
+def senior_aguardar_salvar(
+    destino: str = typer.Option("", "--destino", "-d", help="Caminho do arquivo PDF destino (padrão: V:\\grp-aud-doc\\DIGITALY_CARTAO_PONTO)"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
+):
+    """Passo 7: Aguarda a janela de visualização do relatório, clica no disquete e salva na rede."""
+    from services.senior_service import SeniorService
+
+    _sec(f"Passo 7: Aguardo e Salvamento do Relatório ({ambiente})")
+    service = SeniorService(ambiente=ambiente)
+    caminho_final = service.aguardar_relatorio_e_salvar(
+        caminho_destino_pdf=Path(destino) if destino else None,
+        timeout_segundos=timeout,
+    )
+    if caminho_final:
+        _ok(f"Passo 7 executado com sucesso! Arquivo consolidado salvo em: {caminho_final}")
+    else:
+        _err("Falha ao salvar relatório consolidado.")
+        raise typer.Exit(1)
+
+
 @app.command("senior-fluxo")
 def senior_fluxo(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
@@ -1471,6 +1493,14 @@ def senior_fluxo(
             _info("Etapa 4: Preenchendo Valores de Entrada (Passo 6 - Simulação Dia 04)...")
             if srv.preencher_datas_e_gerar(timeout_janela=15):
                 _ok("Etapa 4 concluída com sucesso (Datas preenchidas e botão Ok acionado)!")
+                
+                # 6. Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO (Passo 7)
+                _info("Etapa 5: Aguardando relatório ser gerado e salvando na rede (Passo 7)...")
+                arq_salvo = srv.aguardar_relatorio_e_salvar()
+                if arq_salvo:
+                    _ok(f"Etapa 5 concluída com sucesso! Relatório consolidado salvo em: {arq_salvo}")
+                else:
+                    _warn("Aviso na Etapa 5: Relatório não foi salvo automaticamente.")
             else:
                 _warn("Aviso na Etapa 4: Não foi possível preencher os Valores de Entrada.")
         else:

@@ -553,47 +553,121 @@ class SeniorService:
         logger.info("Passo 6 executado com sucesso! Relatório disparado para geração.")
         return True
 
-    def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Path) -> Path:
+    def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None) -> Optional[Path]:
         """
         PASSO 7:
-        Aguarda o relatório ser gerado pelo Senior (pode levar 7 a 10 min)
-        e salva na pasta de rede informada.
+        Aguarda o relatório ser gerado pelo Senior (pode levar 7 a 10 min conforme o PDD),
+        detecta a janela 'Visualização do Relatório', clica no ícone do disquete ('Salvar')
+        e salva o arquivo PDF consolidado na pasta de rede informada (padrão: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO).
         """
-        timeout_max = settings.SENIOR_TIMEOUT_RELATORIO_SEGUNDOS
-        logger.info(f"Aguardando a conclusão da geração do relatório (timeout máximo: {timeout_max}s)...")
+        from datetime import datetime
+        import pyperclip
+
+        timeout_max = timeout_segundos or settings.SENIOR_TIMEOUT_RELATORIO_SEGUNDOS
+
+        # 1. Define a pasta e o caminho do arquivo destino
+        pasta_destino = Path(settings.REDE_PASTA_CONSOLIDADO or r"V:\grp-aud-doc\DIGITALY_CARTAO_PONTO")
+        try:
+            pasta_destino.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Pasta de destino confirmada na rede: {pasta_destino}")
+        except Exception as e:
+            logger.error(f"Erro ao criar/acessar pasta de rede '{pasta_destino}': {e}")
+
+        if caminho_destino_pdf:
+            arquivo_final = Path(caminho_destino_pdf)
+            arquivo_final.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            arquivo_final = pasta_destino / f"HRCP702_consolidado_{timestamp}.pdf"
+
+        logger.info(f"PASSO 7: Aguardando relatório ser gerado pelo Senior (timeout: {timeout_max}s / ~{timeout_max//60} min)...")
+        logger.info(f"Arquivo final será salvo em: {arquivo_final}")
+
+        tpl_disquete = self._obter_template("icone_salvar_disquete.png")
+        tpl_tit_rel = self._obter_template("titulo_visualizacao_relatorio.png")
+        tpl_vis = self._obter_template("barra_visualizar_100.png")
 
         inicio = time.time()
-        encontrou_visualizador = False
+        pos_disquete = None
 
+        # 2. Polling até a janela do relatório abrir
         while time.time() - inicio < timeout_max:
-            # Procura por template da janela de visualização do relatório
-            pos = None
-            tpl = self._obter_template("relatorio_visualizador.png")
-            if tpl:
-                pos = gui.locate_on_screen(str(tpl), confidence=self.confidence)
+            # A) Procura pelo ícone do disquete ('Salvar')
+            if tpl_disquete:
+                pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.75)
+                if pos_disquete:
+                    logger.info(f"Ícone de Salvar (Disquete) detectado em: {pos_disquete}!")
+                    break
 
-            if pos:
-                encontrou_visualizador = True
-                logger.info("Janela do relatório finalizado detectada com sucesso na tela!")
-                break
+            # B) Procura pela barra 'Visualizar 100'
+            if tpl_vis:
+                pos_vis = gui.locate_center_on_screen(str(tpl_vis), confidence=0.75)
+                if pos_vis:
+                    logger.info(f"Barra de ferramentas do relatório detectada em {pos_vis}!")
+                    # O disquete fica ~60px à direita da barra 'Visualizar 100'
+                    pos_disquete = (pos_vis[0] + 62, pos_vis[1])
+                    break
 
-            time.sleep(10)
-            logger.debug(f"Aguardando geração do relatório no Senior... ({int(time.time() - inicio)}s decorridos)")
+            # C) Procura pelo título da janela
+            if tpl_tit_rel:
+                pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.75)
+                if pos_tit:
+                    logger.info("Título 'Visualização do Relatório' detectado!")
+                    # Ancoragem relativa: disquete fica ~240px à direita e ~25px abaixo do título
+                    pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
+                    break
 
-        caminho_destino_pdf.parent.mkdir(parents=True, exist_ok=True)
+            tempo_decorrido = int(time.time() - inicio)
+            if tempo_decorrido % 15 == 0:
+                logger.info(f"Aguardando geração do relatório no Senior... ({tempo_decorrido}s decorridos)")
 
-        # Salvar o documento via menu/botão Salvar ou Ctrl+S
-        logger.info(f"Salvando o documento na pasta compartilhada: {caminho_destino_pdf}...")
-        self._clicar_se_encontrar("botao_salvar_relatorio.png", timeout=5, descricao="Botão Salvar do Visualizador")
+            time.sleep(3)
+
+        if not pos_disquete:
+            logger.error(f"Timeout de {timeout_max}s: Janela de relatório não apareceu na tela.")
+            return None
+
+        # 3. Traz a janela do relatório para o foco e clica no ícone do disquete
+        gui.focar_janela("Visualização do Relatório")
+        time.sleep(0.5)
+
+        logger.info(f"Clicando no ícone do disquete (Salvar) em {pos_disquete}...")
+        gui.click(pos_disquete[0], pos_disquete[1])
         time.sleep(2)
 
-        # Digita o caminho completo do arquivo na caixa de diálogo de salvar do Windows
-        gui.type_text(str(caminho_destino_pdf))
+        # 4. Na janela 'Salvar como' do Windows: cola o caminho completo do arquivo
+        logger.info(f"Inserindo caminho completo do arquivo na janela Salvar como: '{arquivo_final}'...")
+        pyperclip.copy(str(arquivo_final))
+        time.sleep(0.3)
+        gui.hotkey("ctrl", "a")
+        gui.press("backspace")
+        gui.hotkey("ctrl", "v")
+        time.sleep(0.5)
+        gui.press("enter")
         time.sleep(1)
+
+        # Trata possível modal de confirmação de sobrescrita ('Sim' / 'Enter')
         gui.press("enter")
         time.sleep(3)
 
-        return caminho_destino_pdf
+        # 5. Aguarda o arquivo ser totalmente gravado em disco
+        logger.info("Aguardando gravação completa do arquivo PDF na rede...")
+        for _ in range(30):
+            if arquivo_final.exists() and arquivo_final.stat().st_size > 0:
+                logger.info(f"Arquivo PDF salvo com sucesso em: {arquivo_final} ({arquivo_final.stat().st_size} bytes)!")
+                break
+            time.sleep(1)
+
+        # Salva print de auditoria do Passo 7
+        try:
+            print_salvo = self.prints_dir / "09_relatorio_consolidado_salvo.png"
+            gui.screenshot(save_to=str(print_salvo))
+            logger.info(f"Print pós-salvamento registrado em: {print_salvo}")
+        except Exception:
+            pass
+
+        logger.info("Passo 7 executado com sucesso!")
+        return arquivo_final
 
     def executar_fluxo_extracao(
         self,
