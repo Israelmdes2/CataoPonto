@@ -1,1 +1,16 @@
+# Comandos Úteis do Projeto - Envio de Cartão Ponto (Senior Desktop)
+
+# 1. Login no Senior Desktop (Homologação)
 .venv\Scripts\python.exe manage.py senior-login
+
+# 2. Login no Senior sem disparar o atalho (caso já esteja com a tela aberta)
+.venv\Scripts\python.exe manage.py senior-login --no-abrir
+
+# 3. Clicar no menu Cálculos (com Senior já logado e aberto)
+.venv\Scripts\python.exe manage.py senior-calculos
+
+# 4. Apenas disparar o atalho do Senior (Homologação)
+.venv\Scripts\python.exe manage.py senior-open --ambiente homologacao
+
+# 5. Executar os testes unitários do robô
+.venv\Scripts\python.exe -m pytest

@@ -1180,5 +1180,56 @@ def senior_login(
     _ok("Fluxo de login no Senior executado com sucesso!")
 
 
+@app.command("senior-calculos")
+def senior_calculos(
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout para localizar a aba Cálculos"),
+    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Confiança da detecção visual"),
+):
+    """Localiza e clica na aba/menu 'Cálculos' do Senior Desktop."""
+    import time
+    from pathlib import Path
+    from infrastructure.automation import gui
+
+    _sec(f"Navegação Senior: Menu Cálculos ({ambiente})")
+    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    templates_dir = Path("assets/templates")
+    prints_dir = Path(f"assets/prints/{amb_clean}")
+    prints_dir.mkdir(parents=True, exist_ok=True)
+
+    tpl_calc = templates_dir / amb_clean / "menu_calculos.png"
+    if not tpl_calc.exists():
+        tpl_calc = templates_dir / "menu_calculos.png"
+
+    if not tpl_calc.exists():
+        _err(f"Template visual 'menu_calculos.png' não encontrado.")
+        raise typer.Exit(1)
+
+    _info(f"Localizando menu 'Cálculos' na tela (timeout: {timeout}s)...")
+    pos = gui.wait_for(str(tpl_calc), timeout=float(timeout), confidence=confidence)
+    if not pos:
+        screenshot_fail = prints_dir / "erro_menu_calculos_nao_encontrado.png"
+        try:
+            gui.screenshot(save_to=str(screenshot_fail))
+            _warn(f"Menu Cálculos não encontrado. Print salvo em: {screenshot_fail}")
+        except Exception:
+            pass
+        _err("Menu 'Cálculos' não encontrado na tela. Certifique-se de que o Senior está logado e aberto.")
+        raise typer.Exit(1)
+
+    _ok(f"Menu 'Cálculos' encontrado em {pos}. Clicando...")
+    gui.click(pos[0], pos[1])
+    time.sleep(1)
+
+    print_apos = prints_dir / "03_apos_clicar_calculos.png"
+    try:
+        gui.screenshot(save_to=str(print_apos))
+        _ok(f"Print após clicar em Cálculos salvo em: {print_apos}")
+    except Exception:
+        pass
+
+    _ok("Clique no menu 'Cálculos' realizado com sucesso!")
+
+
 if __name__ == "__main__":
     app()

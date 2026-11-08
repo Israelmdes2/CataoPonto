@@ -8,3 +8,4 @@ Templates visuais calibrados em resolução nativa 1080p para o Senior no ambien
 - `campo_senha.png`: Campo de senha.
 - `logo_senior.png`: Logo Senior.
 - `modulo_ponto.png`: Atalho/ícone do Controle de Ponto e Refeitório.
+

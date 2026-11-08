@@ -9,3 +9,4 @@ Armazene nesta pasta os prints/templates PNG recortados da tela do Senior no amb
 - Demais menus e botões específicos que diferem de homologação.
 
 > O sistema buscará primeiro nesta pasta (`assets/templates/producao/`). Se um template específico não for encontrado aqui, o robô automaticamente faz fallback para o template padrão em `assets/templates/`.
+
