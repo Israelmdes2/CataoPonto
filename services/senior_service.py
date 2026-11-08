@@ -304,17 +304,72 @@ class SeniorService:
 
         return True
 
-    def selecionar_relatorio_702(self) -> bool:
+    def selecionar_relatorio_702(self, timeout_janela: int = 15) -> bool:
         """
         PASSO 5:
-        1. Selecionar a opção equivalente ao código '702';
-        2. Clicar no botão 'Executar'.
+        1. Aguardar a janela 'Seleção de Modelos para Execução';
+        2. Descer a barra de rolagem até encontrar a opção 702 ('UnimedVA - Cartão Ponto Portal');
+        3. Clicar no nome da opção 702 para selecioná-la;
+        4. Clicar no botão 'Executar'.
         """
-        logger.info("Selecionando relatório código 702 e clicando em Executar...")
-        self._clicar_se_encontrar("codigo_702.png", timeout=5, descricao="Relatório Código 702")
-        time.sleep(1)
-        self._clicar_se_encontrar("botao_executar.png", timeout=5, descricao="Botão Executar")
+        logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
+        self.focar_janela_senior()
+
+        # 1. Aguarda a janela abrir (identificada pelo título ou pelo botão Executar)
+        tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
+        tpl_exec = self._obter_template("botao_executar.png")
+        tpl_702 = self._obter_template("codigo_702.png")
+
+        pos_exec = None
+        if tpl_exec:
+            pos_exec = gui.wait_for(str(tpl_exec), timeout=timeout_janela, confidence=self.confidence)
+
+        if not pos_exec and tpl_titulo:
+            pos_tit = gui.wait_for(str(tpl_titulo), timeout=5, confidence=self.confidence)
+            if pos_tit and tpl_exec:
+                pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
+
+        if not pos_exec:
+            logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada após timeout.")
+            return False
+
+        logger.info(f"Janela de Modelos aberta! Botão Executar localizado em: {pos_exec}")
+
+        # 2. Posiciona o foco no centro da lista de modelos (à esquerda do botão Executar)
+        x_lista = pos_exec[0] - 250
+        y_lista = pos_exec[1]
+        logger.info(f"Focando grade de modelos em ({x_lista}, {y_lista})...")
+        gui.click(x_lista, y_lista)
+        time.sleep(0.5)
+
+        # 3. Rola a barra de rolagem até localizar a opção 702
+        pos_702 = None
+        for i in range(20):
+            # Verifica se a opção 702 já está visível
+            if tpl_702:
+                pos_702 = gui.locate_center_on_screen(str(tpl_702), confidence=0.70)
+                if pos_702:
+                    logger.info(f"Opção 702 encontrada na tela em {pos_702} (após {i} rolagens)!")
+                    break
+
+            # Desce a lista com PageDown ou scroll do mouse
+            gui.press("pagedown")
+            time.sleep(0.4)
+
+        if not pos_702:
+            logger.warning("Opção 702 ('UnimedVA - Cartão Ponto Portal') não encontrada na lista após rolagem.")
+            return False
+
+        # 4. Clica no nome da opção 702 para selecionar
+        logger.info(f"Clicando na opção 702 em {pos_702}...")
+        gui.click(pos_702[0], pos_702[1])
+        time.sleep(0.8)
+
+        # 5. Clica no botão Executar
+        logger.info(f"Clicando no botão Executar em {pos_exec}...")
+        gui.click(pos_exec[0], pos_exec[1])
         time.sleep(3)
+        logger.info("Passo 5 executado com sucesso!")
         return True
 
     def preencher_datas_e_gerar(self, data_inicial: str, data_final: str) -> bool:

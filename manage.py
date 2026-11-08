@@ -1368,6 +1368,23 @@ def senior_menu_cartao(
     _ok("Navegação completa até o Cartão Ponto realizada com sucesso!")
 
 
+@app.command("senior-selecionar-702")
+def senior_selecionar_702(
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
+):
+    """Passo 5: Desce a rolagem na Seleção de Modelos, seleciona o 702 e clica em Executar."""
+    from services.senior_service import SeniorService
+
+    _sec(f"Passo 5: Seleção de Relatório 702 ({ambiente})")
+    service = SeniorService(ambiente=ambiente)
+    if service.selecionar_relatorio_702(timeout_janela=timeout):
+        _ok("Opção 702 selecionada e botão Executar clicado com sucesso!")
+    else:
+        _err("Falha ao selecionar o relatório 702.")
+        raise typer.Exit(1)
+
+
 @app.command("senior-fluxo")
 def senior_fluxo(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
@@ -1375,10 +1392,11 @@ def senior_fluxo(
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(25, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
-    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
+    confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
+    selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Modelo 702 + Executar)"),
 ):
-    """Executa o fluxo geral: Login no Senior + Navegação completa até o Cartão Ponto."""
-    _sec(f"Fluxo Geral Senior: Login + Navegação ({ambiente})")
+    """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo 702."""
+    _sec(f"Fluxo Geral Senior: Login + Navegação + Modelo 702 ({ambiente})")
     
     # 1. Executa o Login
     _info("Etapa 1: Executando Login no Senior...")
@@ -1404,7 +1422,17 @@ def senior_fluxo(
         confidence=confidence,
     )
 
-    _ok("Fluxo geral de Login e Navegação executado com sucesso!")
+    # 4. Executa a Seleção do Modelo 702 (Passo 5)
+    if selecionar_702:
+        _info("Etapa 3: Selecionando modelo 702 ('UnimedVA - Cartão Ponto Portal') e Executar...")
+        from services.senior_service import SeniorService
+        srv = SeniorService(ambiente=ambiente)
+        if srv.selecionar_relatorio_702(timeout_janela=15):
+            _ok("Etapa 3 concluída com sucesso (Modelo 702 selecionado e Executar clicado)!")
+        else:
+            _warn("Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo 702.")
+
+    _ok("Fluxo geral executado com sucesso!")
 
 
 if __name__ == "__main__":
