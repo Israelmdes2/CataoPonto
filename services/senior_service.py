@@ -309,9 +309,9 @@ class SeniorService:
         4. Clicar no botão 'Executar'.
         """
         logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
-        self.focar_janela_senior()
 
         # 1. Aguarda a janela abrir (identificada pelo botão Executar ou pelo Título)
+        # Atenção: NÃO chamar focar_janela_senior() aqui para não ativar a janela mãe e minimizar o modal!
         tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
         tpl_exec = self._obter_template("botao_executar.png")
         tpl_nome = self._obter_template("nome_opcao_702.png")
@@ -323,12 +323,20 @@ class SeniorService:
             pos_exec = gui.wait_for(str(tpl_exec), timeout=timeout_janela, confidence=self.confidence)
 
         if not pos_exec and tpl_titulo:
-            pos_tit = gui.wait_for(str(tpl_titulo), timeout=5, confidence=self.confidence)
+            pos_tit = gui.wait_for(str(tpl_titulo), timeout=4, confidence=self.confidence)
             if pos_tit:
                 if tpl_exec:
-                    pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
+                    pos_exec = gui.wait_for(str(tpl_exec), timeout=3, confidence=self.confidence)
                 if not pos_exec:
                     pos_exec = (pos_tit[0] + 510, pos_tit[1] + 35)
+
+        # Fallback de foco: só tenta focar se a janela não estiver visível na tela
+        if not pos_exec:
+            logger.info("Tentando focar especificamente a janela 'Seleção de Modelos'...")
+            gui.focar_janela("seleção de modelos")
+            time.sleep(1)
+            if tpl_exec:
+                pos_exec = gui.wait_for(str(tpl_exec), timeout=5, confidence=self.confidence)
 
         if not pos_exec:
             logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada após timeout.")
@@ -407,7 +415,7 @@ class SeniorService:
             y_ultima_linha = pos_exec[1] + 120
             pos_nome_702 = (x_coluna_nome, y_ultima_linha)
 
-        # 5. Clica especificamente no NOME da opção 702 (com duplo clique de garantia para seleção ativa)
+        # 5. Clica especificamente no NOME da opção 702
         logger.info(f"Clicando no NOME da opção 702 ('UnimedVA - Cartão Ponto Portal') em {pos_nome_702}...")
         gui.click(pos_nome_702[0], pos_nome_702[1])
         time.sleep(0.3)

@@ -231,15 +231,16 @@ def focar_janela(titulo_parcial: str) -> bool:
 
 
 def focar_senior_geral() -> bool:
-    """Busca e coloca em primeiro plano qualquer janela aberta pertencente ao Senior."""
+    """Busca e coloca em primeiro plano qualquer janela aberta pertencente ao Senior priorizando janelas modais."""
     termos = [
-        "autorização",
-        "gestão de pessoas",
-        "controle de ponto",
         "seleção de modelos",
-        "senior",
+        "modelos para execução",
+        "autorização",
+        "controle de ponto e refeitório",
+        "gestão de pessoas",
         "vetorh",
         "ronda",
+        "senior",
     ]
     for termo in termos:
         if focar_janela(termo):
