@@ -561,66 +561,79 @@ class SeniorService:
     ) -> Optional[Path]:
         """
         Aguarda o relatório ser totalmente gerado na pasta pelo Senior,
-        aguarda virar .pdf, estabilizar o tamanho (sem alteração por 3s)
-        e valida a integridade com PdfReader antes de liberar para o próximo passo.
+        garante que o cabeçalho seja PDF válido (%PDF), estabiliza o tamanho
+        (sem alteração por 3s) e valida a integridade com PdfReader antes de liberar para o próximo passo.
         """
         from pypdf import PdfReader
         arquivo_alvo = pasta / nome_esperado
         inicio = time.time()
         ultimo_tamanho = -1
 
-        logger.info(f"Monitorando pasta '{pasta}' aguardando arquivo PDF finalizado...")
+        logger.info(f"Monitorando pasta '{pasta}' aguardando arquivo PDF finalizado e íntegro...")
 
         while time.time() - inicio < timeout_segundos:
-            # 1. Procura pelo arquivo alvo ou arquivos gerados pelo Senior na pasta
             candidato = None
 
+            # 1. Procura primeiro pelo arquivo com o nome esperado
             if arquivo_alvo.exists() and arquivo_alvo.stat().st_size > 0:
                 candidato = arquivo_alvo
             else:
-                # Se ainda não está com o nome esperado, verifica se há HRCP702.pdf ou HRCP702.imp
-                candidatos_pasta = list(pasta.glob("HRCP702*.pdf")) + list(pasta.glob("HRCP702*.imp"))
-                if candidatos_pasta:
-                    # Pega o mais recente
-                    candidatos_pasta.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                    mais_recente = candidatos_pasta[0]
-                    if mais_recente.stat().st_size > 0:
-                        # Se for .imp ou sem a data, tenta renomear para o nome esperado
-                        if mais_recente != arquivo_alvo:
-                            try:
-                                if arquivo_alvo.exists():
-                                    arquivo_alvo.unlink()
-                                mais_recente.rename(arquivo_alvo)
-                                logger.info(f"Arquivo renomeado para o padrão final: {mais_recente.name} -> {arquivo_alvo.name}")
-                                candidato = arquivo_alvo
-                            except Exception:
-                                candidato = mais_recente
-                        else:
+                # Procura outros arquivos .pdf gerados na pasta
+                candidatos_pdf = [f for f in pasta.glob("HRCP702*.pdf") if f.is_file() and f.stat().st_size > 0]
+                if candidatos_pdf:
+                    candidatos_pdf.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                    mais_recente = candidatos_pdf[0]
+                    if mais_recente != arquivo_alvo:
+                        try:
+                            if arquivo_alvo.exists():
+                                arquivo_alvo.unlink()
+                            mais_recente.rename(arquivo_alvo)
+                            logger.info(f"Arquivo renomeado para o padrão final: {mais_recente.name} -> {arquivo_alvo.name}")
+                            candidato = arquivo_alvo
+                        except Exception:
                             candidato = mais_recente
+                    else:
+                        candidato = mais_recente
 
-            # 2. Se encontrou um candidato, testa a estabilização do tamanho e leitura
+            # 2. Se encontrou candidato, verifica o cabeçalho binário (deve começar com %PDF)
             if candidato and candidato.exists():
                 tam_atual = candidato.stat().st_size
                 if tam_atual > 0:
+                    try:
+                        with open(candidato, "rb") as f_head:
+                            header = f_head.read(8)
+                        
+                        if not header.startswith(b"%PDF"):
+                            logger.info(
+                                f"Arquivo '{candidato.name}' detectado ({tam_atual} bytes), "
+                                f"mas ainda não possui cabeçalho PDF válido (%PDF). Aguardando Senior converter/finalizar..."
+                            )
+                            time.sleep(3)
+                            continue
+                    except Exception as e_head:
+                        logger.info(f"Arquivo bloqueado pelo Senior para leitura de cabeçalho: {e_head}. Aguardando...")
+                        time.sleep(3)
+                        continue
+
+                    # 3. Cabeçalho é %PDF! Agora verifica se o tamanho está estabilizado
                     if tam_atual == ultimo_tamanho:
-                        # Tamanho estável por pelo menos 1 ciclo! Testa se o arquivo está desbloqueado e é um PDF íntegro
                         try:
                             with open(candidato, "rb") as f_test:
                                 reader = PdfReader(f_test)
                                 num_pags = len(reader.pages)
                                 if num_pags > 0:
                                     logger.info(
-                                        f"Arquivo PDF validado com sucesso: '{candidato.name}' "
+                                        f"Arquivo PDF validado com sucesso e 100% íntegro: '{candidato.name}' "
                                         f"({num_pags} páginas, {tam_atual} bytes)."
                                     )
                                     return candidato
-                        except Exception as e:
-                            logger.info(f"Arquivo ainda sendo finalizado pelo Senior ({e}). Aguardando gravação...")
+                        except Exception as e_pdf:
+                            logger.info(f"PDF ainda sendo gravado/fechado pelo Senior ({e_pdf}). Aguardando estabilização...")
                     else:
-                        logger.info(f"Arquivo em gravação pelo Senior... Tamanho atual: {tam_atual} bytes. Aguardando estabilização...")
+                        logger.info(f"Arquivo PDF em gravação pelo Senior... Tamanho atual: {tam_atual} bytes. Aguardando estabilização...")
                         ultimo_tamanho = tam_atual
                 else:
-                    logger.info("Arquivo detectado com 0 bytes. Aguardando escrita do Senior...")
+                    logger.info("Arquivo PDF detectado com 0 bytes. Aguardando Senior iniciar a escrita...")
 
             tempo_decorrido = int(time.time() - inicio)
             if tempo_decorrido % 15 == 0 and tempo_decorrido > 0:
@@ -635,6 +648,7 @@ class SeniorService:
         """
         PASSO 7:
         Aguarda o relatório ser gerado pelo Senior, clica no ícone do disquete ('Salvar'),
+        seleciona obrigatoriamente o tipo 'Arquivo PDF (*.pdf)',
         navega até a pasta específica com a DATA DA EXECUÇÃO (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026),
         salva o arquivo como HRCP702_DDMMAAAA.pdf e aguarda a finalização e estabilização completa do PDF.
         """
@@ -727,7 +741,17 @@ class SeniorService:
         gui.press("enter")
         time.sleep(1.2)
 
-        # 5. Preenche o nome do arquivo no campo 'Nome:'
+        # 5. Seleciona obrigatoriamente o Tipo: 'Arquivo PDF (*.pdf)' (Passo fundamental para gerar PDF real!)
+        logger.info("Alterando o Tipo de Arquivo para 'Arquivo PDF (*.pdf)'...")
+        gui.hotkey("alt", "t")
+        time.sleep(0.3)
+        # No Delphi/Windows: o item 1 é '.imp' e o item 2 é '.pdf'
+        gui.press("down")
+        time.sleep(0.3)
+        gui.press("enter")
+        time.sleep(0.5)
+
+        # 6. Preenche o nome do arquivo no campo 'Nome:'
         nome_arquivo = arquivo_final.name
         logger.info(f"Inserindo nome do arquivo '{nome_arquivo}' no campo Nome...")
         gui.hotkey("alt", "n")
@@ -738,7 +762,7 @@ class SeniorService:
         gui.hotkey("ctrl", "v")
         time.sleep(0.5)
 
-        # 6. Clica em 'Salvar'
+        # 7. Clica em 'Salvar'
         salvo_clicado = False
         if tpl_btn_salvar:
             pos_btn_salvar = gui.locate_center_on_screen(str(tpl_btn_salvar), confidence=0.75)
@@ -761,7 +785,7 @@ class SeniorService:
         gui.press("enter")
         time.sleep(2)
 
-        # 7. Aguarda o arquivo ser totalmente carregado na pasta, virar .pdf e estabilizar o tamanho
+        # 8. Aguarda o arquivo ser totalmente carregado na pasta, virar .pdf real e estabilizar o tamanho
         logger.info(f"Aguardando arquivo ser gerado e estabilizado como PDF em '{pasta_destino}'...")
         arquivo_validado = self.aguardar_arquivo_pdf_estabilizado(
             pasta=pasta_destino,
