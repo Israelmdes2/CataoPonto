@@ -1168,8 +1168,23 @@ def senior_login(
     time.sleep(0.5)
     _info("Clicando no botão 'Autenticar'...")
     gui.click(pos_btn[0], pos_btn[1])
+    time.sleep(1)
+    gui.press("enter")
 
-    time.sleep(3)
+    _info("Aguardando autenticação e carregamento do sistema Senior...")
+    login_fechou = False
+    for i in range(30):
+        time.sleep(1)
+        # Se o botão autenticar sumiu da tela, significa que o login foi submetido
+        if not gui.locate_on_screen(str(tpl_btn), confidence=0.65):
+            login_fechou = True
+            _ok(f"Autenticação aceita! Tela de login finalizada em ~{i+1}s.")
+            break
+
+    if not login_fechou:
+        _warn("Aviso: Tela de login ainda presente após 30s. Verifique se usuário/senha estão corretos.")
+
+    time.sleep(5)
     print_sucesso = prints_dir / "02_apos_login.png"
     try:
         gui.screenshot(save_to=str(print_sucesso))
@@ -1286,8 +1301,8 @@ def senior_click(
 @app.command("senior-menu-cartao")
 def senior_menu_cartao(
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout_passo: int = typer.Option(6, "--timeout", "-t", help="Timeout para cada clique de menu"),
-    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
+    timeout_passo: int = typer.Option(20, "--timeout", "-t", help="Timeout para cada clique de menu"),
+    confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
 ):
     """Executa a navegação completa dos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
     import time
@@ -1299,6 +1314,18 @@ def senior_menu_cartao(
     templates_dir = Path("assets/templates")
     prints_dir = Path(f"assets/prints/{amb_clean}")
     prints_dir.mkdir(parents=True, exist_ok=True)
+
+    # Em Homologação: se estiver na tela de seleção do módulo, clica no ícone antes de Cálculos
+    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
+    if not tpl_modulo.exists():
+        tpl_modulo = templates_dir / "icone_modulo.png"
+    if tpl_modulo.exists():
+        _info("Verificando se ícone do módulo de colaboradores está visível...")
+        pos_mod = gui.wait_for(str(tpl_modulo), timeout=5, confidence=0.70)
+        if pos_mod:
+            _ok(f"Ícone de módulo encontrado em {pos_mod}. Clicando para abrir menus...")
+            gui.click(pos_mod[0], pos_mod[1])
+            time.sleep(3)
 
     passos = [
         ("menu_calculos.png", "Cálculos"),
