@@ -1343,5 +1343,44 @@ def senior_menu_cartao(
     _ok("Navegação completa até o Cartão Ponto realizada com sucesso!")
 
 
+@app.command("senior-fluxo")
+def senior_fluxo(
+    usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
+    senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
+    abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(25, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
+    confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
+):
+    """Executa o fluxo geral: Login no Senior + Navegação completa até o Cartão Ponto."""
+    _sec(f"Fluxo Geral Senior: Login + Navegação ({ambiente})")
+    
+    # 1. Executa o Login
+    _info("Etapa 1: Executando Login no Senior...")
+    senior_login(
+        usuario=usuario,
+        senha=senha,
+        abrir=abrir,
+        ambiente=ambiente,
+        timeout=timeout,
+        confidence=confidence,
+    )
+
+    # 2. Aguarda estabilização da tela pós-login
+    import time
+    _info("Aguardando estabilização dos menus pós-login...")
+    time.sleep(3)
+
+    # 3. Executa a Navegação de Menus (Passo 4)
+    _info("Etapa 2: Navegando pelos menus até Cartão Ponto...")
+    senior_menu_cartao(
+        ambiente=ambiente,
+        timeout_passo=timeout,
+        confidence=confidence,
+    )
+
+    _ok("Fluxo geral de Login e Navegação executado com sucesso!")
+
+
 if __name__ == "__main__":
     app()

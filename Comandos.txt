@@ -1,12 +1,25 @@
 # Comandos Úteis do Projeto - Envio de Cartão Ponto (Senior Desktop)
 
-# 1. Login no Senior Desktop (Homologação)
+# ==============================================================================
+# FLUXO GERAL CONJUNTO (Login + Navegação dos Menus)
+# ==============================================================================
+# Executa tudo de ponta a ponta: abre o Senior, faz login e navega até o Cartão Ponto
+.venv\Scripts\python.exe manage.py senior-fluxo
+
+# Executa o fluxo geral aproveitando a janela do Senior já aberta na tela:
+.venv\Scripts\python.exe manage.py senior-fluxo --no-abrir
+
+
+# ==============================================================================
+# COMANDOS INDIVIDUAIS POR ETAPA
+# ==============================================================================
+# 1. Apenas Login no Senior Desktop (Homologação)
 .venv\Scripts\python.exe manage.py senior-login
 
-# 2. Login no Senior sem disparar o atalho (caso já esteja com a tela aberta)
+# 2. Apenas Login sem disparar o executável/atalho (tela já aberta)
 .venv\Scripts\python.exe manage.py senior-login --no-abrir
 
-# 3. Navegação completa dos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto
+# 3. Apenas Navegação dos Menus (Cálculos -> Apuração -> Listar -> Cartão Ponto)
 .venv\Scripts\python.exe manage.py senior-menu-cartao
 
 # 4. Clicar em qualquer elemento/menu individualmente
@@ -14,6 +27,7 @@
 .venv\Scripts\python.exe manage.py senior-click menu_listar
 .venv\Scripts\python.exe manage.py senior-click menu_apuracao
 .venv\Scripts\python.exe manage.py senior-click menu_calculos
+.venv\Scripts\python.exe manage.py senior-click icone_modulo
 
 # 5. Apenas disparar o atalho do Senior (Homologação)
 .venv\Scripts\python.exe manage.py senior-open --ambiente homologacao
