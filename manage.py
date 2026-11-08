@@ -1304,10 +1304,11 @@ def senior_menu_cartao(
     timeout_passo: int = typer.Option(20, "--timeout", "-t", help="Timeout para cada clique de menu"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
 ):
-    """Executa a navegação completa dos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
+    """Executa a navegação completa dos menus com Self-Healing: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
     import time
     from pathlib import Path
     from infrastructure.automation import gui
+    from services.senior_service import SeniorService
 
     _sec(f"Navegação Senior: Menu Completo Cartão Ponto ({ambiente})")
     amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
@@ -1315,17 +1316,12 @@ def senior_menu_cartao(
     prints_dir = Path(f"assets/prints/{amb_clean}")
     prints_dir.mkdir(parents=True, exist_ok=True)
 
-    # Em Homologação: se estiver na tela de seleção do módulo, clica no ícone antes de Cálculos
-    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
-    if not tpl_modulo.exists():
-        tpl_modulo = templates_dir / "icone_modulo.png"
-    if tpl_modulo.exists():
-        _info("Verificando se ícone do módulo de colaboradores está visível...")
-        pos_mod = gui.wait_for(str(tpl_modulo), timeout=5, confidence=0.70)
-        if pos_mod:
-            _ok(f"Ícone de módulo encontrado em {pos_mod}. Clicando para abrir menus...")
-            gui.click(pos_mod[0], pos_mod[1])
-            time.sleep(3)
+    service = SeniorService(ambiente=ambiente)
+    service.confidence = confidence
+
+    # 1. Garante que a tela principal e os menus estão prontos e desobstruídos
+    _info("Garantindo estado pronto dos menus (Self-Healing ativo)...")
+    service.garantir_menu_principal_pronto(timeout=float(timeout_passo))
 
     passos = [
         ("menu_calculos.png", "Cálculos"),
@@ -1335,16 +1331,18 @@ def senior_menu_cartao(
     ]
 
     for arquivo, desc in passos:
-        tpl = templates_dir / amb_clean / arquivo
-        if not tpl.exists():
-            tpl = templates_dir / arquivo
-
-        if not tpl.exists():
+        tpl = service._obter_template(arquivo)
+        if not tpl:
             _err(f"Template visual '{arquivo}' não encontrado.")
             raise typer.Exit(1)
 
         _info(f"Localizando menu '{desc}' ({arquivo})...")
         pos = gui.wait_for(str(tpl), timeout=float(timeout_passo), confidence=confidence)
+        if not pos:
+            # Tenta auto-recuperação (foco, clique em módulo se reapareceu)
+            service.tratar_obstaculos_conhecidos()
+            pos = gui.wait_for(str(tpl), timeout=5.0, confidence=confidence)
+
         if not pos:
             screenshot_fail = prints_dir / f"erro_menu_{arquivo}"
             try:
@@ -1357,7 +1355,7 @@ def senior_menu_cartao(
 
         _ok(f"Menu '{desc}' encontrado em {pos}. Clicando...")
         gui.click(pos[0], pos[1])
-        time.sleep(1)
+        time.sleep(1.2)
 
     time.sleep(2)
     print_tela = prints_dir / "04_tela_relatorio_702.png"

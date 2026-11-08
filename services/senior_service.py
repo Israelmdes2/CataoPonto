@@ -83,21 +83,70 @@ class SeniorService:
             return caminho_raiz
         return None
 
-    def _clicar_icone_modulo_se_necessario(self, timeout: int = 6) -> bool:
-        """Em Homologação, localiza e clica no ícone do módulo (Gestão de Pessoas / Ponto)."""
-        tpl_mod = self._obter_template("icone_modulo.png")
-        if tpl_mod:
-            logger.info("Verificando se o ícone de módulo do Senior está visível...")
-            pos = gui.wait_for(str(tpl_mod), timeout=timeout, confidence=0.75)
-            if pos:
-                logger.info(f"Ícone de módulo encontrado em {pos}. Clicando...")
-                gui.click(pos[0], pos[1])
-                time.sleep(2)
+    def focar_janela_senior(self) -> bool:
+        """Garante que a janela do Senior esteja em primeiro plano."""
+        for titulo in ["Senior", "Controle de Ponto", "Autorização", "Vetorh", "Ronda"]:
+            if gui.focar_janela(titulo):
                 return True
         return False
 
-    def _clicar_se_encontrar(self, nome_template: str, timeout: int = 10, descricao: str = "") -> bool:
-        """Localiza o template na tela usando Visão Computacional / PyAutoGUI e clica."""
+    def _esta_visivel(self, nome_template: str, confidence: float = 0.70) -> bool:
+        """Verifica se um elemento visual está presente na tela sem bloquear."""
+        tpl = self._obter_template(nome_template)
+        if not tpl:
+            return False
+        return gui.is_visible(str(tpl), confidence=confidence)
+
+    def tratar_obstaculos_conhecidos(self) -> bool:
+        """
+        Motor de Auto-Recuperação (Self-Healing):
+        Detecta e resolve obstáculos intermediários antes do próximo passo:
+        1. Foca a janela do Senior;
+        2. Clica no ícone de módulo (colaboradores) caso apareça;
+        3. Retorna True se tratou alguma condição.
+        """
+        self.focar_janela_senior()
+
+        # 1. Ícone de seleção de módulo (Homologação / hub)
+        tpl_mod = self._obter_template("icone_modulo.png")
+        if tpl_mod and gui.is_visible(str(tpl_mod), confidence=0.70):
+            logger.info("Auto-recuperação: Ícone de módulo detectado na tela. Clicando para expandir...")
+            pos = gui.locate_center_on_screen(str(tpl_mod), confidence=0.70)
+            if pos:
+                gui.click(pos[0], pos[1])
+                time.sleep(2)
+                return True
+
+        return False
+
+    def _clicar_icone_modulo_se_necessario(self, timeout: int = 6) -> bool:
+        """Mantido para compatibilidade: trata a transição de módulo."""
+        return self.tratar_obstaculos_conhecidos()
+
+    def garantir_menu_principal_pronto(self, timeout: float = 30.0) -> bool:
+        """
+        Garante com auto-recuperação que o menu principal (ex: Cálculos) está pronto.
+        Trata carregamento lento, perda de foco e necessidade de clicar no ícone de módulo.
+        """
+        logger.info(f"Garantindo que a tela principal com menus está pronta (timeout: {timeout}s)...")
+        deadline = time.time() + timeout
+        tpl_calc = self._obter_template("menu_calculos.png")
+
+        while time.time() < deadline:
+            # 1. Se Cálculos já está visível, sucesso imediato
+            if tpl_calc and gui.is_visible(str(tpl_calc), confidence=0.70):
+                logger.info("Menu principal ('Cálculos') confirmado e pronto!")
+                return True
+
+            # 2. Se não estiver visível, tenta resolver obstáculos conhecidos
+            self.tratar_obstaculos_conhecidos()
+            time.sleep(1.5)
+
+        logger.warning(f"Timeout de {timeout}s: Menu principal não foi detectado.")
+        return False
+
+    def _clicar_se_encontrar(self, nome_template: str, timeout: int = 10, descricao: str = "", tentar_recuperar: bool = True) -> bool:
+        """Localiza o template na tela usando Visão Computacional com auto-recuperação e clica."""
         template_path = self._obter_template(nome_template)
         desc = descricao or nome_template
 
@@ -116,9 +165,19 @@ class SeniorService:
                 gui.click(x, y)
                 logger.info(f"Elemento '{desc}' clicado na posição ({x}, {y}).")
                 return True
-            else:
-                logger.warning(f"Elemento visual '{desc}' não encontrado na tela após {timeout}s.")
-                return False
+
+            # Tentativa de Self-Healing se habilitado
+            if tentar_recuperar:
+                logger.info(f"Elemento '{desc}' não visto de imediato. Tentando auto-recuperação...")
+                if self.tratar_obstaculos_conhecidos():
+                    pos_retry = gui.wait_for(str(template_path), timeout=5, confidence=self.confidence)
+                    if pos_retry:
+                        gui.click(pos_retry[0], pos_retry[1])
+                        logger.info(f"Elemento '{desc}' clicado após auto-recuperação!")
+                        return True
+
+            logger.warning(f"Elemento visual '{desc}' não encontrado na tela após {timeout}s.")
+            return False
         except Exception as e:
             logger.error(f"Erro ao tentar localizar visualmente '{desc}': {e}")
             return False
@@ -228,6 +287,10 @@ class SeniorService:
         4. Clicar na opção 'Cartão Ponto'.
         """
         logger.info("Navegando pelos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto...")
+        
+        # Garante que a tela de menus está pronta e desobstruída antes de navegar
+        self.garantir_menu_principal_pronto(timeout=25)
+
         steps = [
             ("menu_calculos.png", "Aba Cálculos"),
             ("menu_apuracao.png", "Opção Apuração"),

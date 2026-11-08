@@ -177,3 +177,57 @@ def screen_size() -> tuple[int, int]:
 def mouse_position() -> tuple[int, int]:
     p = _pg().position()
     return (int(p.x), int(p.y))
+
+
+# ── Gerenciamento de Janelas e Resiliência / Window & Resilience Helpers ─
+
+def is_visible(template_path: Union[str, Path], confidence: float = 0.70) -> bool:
+    """Verifica de imediato se o template está visível na tela sem aguardar."""
+    return locate_center_on_screen(template_path, confidence=confidence) is not None
+
+
+def focar_janela(titulo_parcial: str) -> bool:
+    """Localiza janela pelo título parcial e traz para primeiro plano."""
+    try:
+        import pygetwindow as gw
+        janelas = [w for w in gw.getAllWindows() if titulo_parcial.lower() in (w.title or '').lower()]
+        if janelas:
+            win = janelas[0]
+            if win.isMinimized:
+                win.restore()
+            win.activate()
+            time.sleep(0.3)
+            return True
+    except Exception:
+        pass
+
+    # Fallback via Win32 API ctypes
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        target_hwnd = None
+
+        def callback(hwnd, extra):
+            nonlocal target_hwnd
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buff = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buff, length + 1)
+                    if titulo_parcial.lower() in buff.value.lower():
+                        target_hwnd = hwnd
+                        return False
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows(WNDENUMPROC(callback), 0)
+
+        if target_hwnd:
+            user32.ShowWindow(target_hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(target_hwnd)
+            time.sleep(0.3)
+            return True
+    except Exception:
+        pass
+
+    return False
