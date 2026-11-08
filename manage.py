@@ -1403,6 +1403,25 @@ def senior_selecionar_702(
         raise typer.Exit(1)
 
 
+@app.command("senior-valores-entrada")
+def senior_valores_entrada(
+    data_inicial: str = typer.Option("", "--data-inicial", "-i", help="Data inicial dd/mm/aaaa (calculada pelo PDD se omitida)"),
+    data_final: str = typer.Option("", "--data-final", "-f", help="Data final dd/mm/aaaa (calculada pelo PDD se omitida)"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar o modal"),
+):
+    """Passo 6: Preenche Data Inicial e Final no modal Valores de Entrada e clica em Ok."""
+    from services.senior_service import SeniorService
+
+    _sec(f"Passo 6: Preenchimento de Valores de Entrada ({ambiente})")
+    service = SeniorService(ambiente=ambiente)
+    if service.preencher_datas_e_gerar(data_inicial=data_inicial or None, data_final=data_final or None, timeout_janela=timeout):
+        _ok("Passo 6 executado com sucesso: Datas preenchidas e botão Ok clicado!")
+    else:
+        _err("Falha ao preencher Valores de Entrada.")
+        raise typer.Exit(1)
+
+
 @app.command("senior-fluxo")
 def senior_fluxo(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
@@ -1447,6 +1466,13 @@ def senior_fluxo(
         srv = SeniorService(ambiente=ambiente)
         if srv.selecionar_relatorio_702(timeout_janela=15):
             _ok("Etapa 3 concluída com sucesso (Modelo 702 selecionado e Executar clicado)!")
+            
+            # 5. Executa o Preenchimento de Valores de Entrada (Passo 6 - Simulação Dia 04)
+            _info("Etapa 4: Preenchendo Valores de Entrada (Passo 6 - Simulação Dia 04)...")
+            if srv.preencher_datas_e_gerar(timeout_janela=15):
+                _ok("Etapa 4 concluída com sucesso (Datas preenchidas e botão Ok acionado)!")
+            else:
+                _warn("Aviso na Etapa 4: Não foi possível preencher os Valores de Entrada.")
         else:
             _warn("Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo 702.")
 

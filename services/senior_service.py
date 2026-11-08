@@ -419,26 +419,138 @@ class SeniorService:
         logger.info("Passo 5 executado com sucesso!")
         return True
 
-    def preencher_datas_e_gerar(self, data_inicial: str, data_final: str) -> bool:
+    def calcular_periodo_pdd(self, dia_simulado: Optional[int] = 4) -> tuple[str, str]:
+        """
+        Calcula as datas inicial e final de apuração de acordo com a regra do PDD (Passo 6):
+        - Dia 20: Início dia 20 mês anterior | Fim dia 19 mês atual
+        - Dia 30: Início dia 20 mês anterior | Fim dia 19 mês atual
+        - Dia 04: Início dia 20 penúltimo mês | Fim dia 19 mês anterior
+        """
+        from datetime import datetime
+        from dateutil.relativedelta import relativedelta
+
+        # =========================================================================
+        # SIMULAÇÃO DE TESTE DO DIA 04 (PDD Passo 6)
+        # Para produção, comente dia_exec = dia_simulado e descomente dia_exec = agora.day
+        # =========================================================================
+        agora = datetime.now()
+        dia_exec = dia_simulado if dia_simulado is not None else agora.day
+
+        if dia_exec == 4:
+            # Dia 04:
+            # Data Inicial: dia 20 do penúltimo mês (agora - 2 meses)
+            # Data Final: dia 19 do mês anterior (agora - 1 mês)
+            dt_ini = (agora - relativedelta(months=2)).replace(day=20)
+            dt_fim = (agora - relativedelta(months=1)).replace(day=19)
+        elif dia_exec in (20, 30):
+            # Dias 20 e 30:
+            # Data Inicial: dia 20 do mês anterior (agora - 1 mês)
+            # Data Final: dia 19 do mês atual
+            dt_ini = (agora - relativedelta(months=1)).replace(day=20)
+            dt_fim = agora.replace(day=19)
+        else:
+            # Fallback padrão: regra do dia 04
+            dt_ini = (agora - relativedelta(months=2)).replace(day=20)
+            dt_fim = (agora - relativedelta(months=1)).replace(day=19)
+
+        str_ini = dt_ini.strftime("%d/%m/%Y")
+        str_fim = dt_fim.strftime("%d/%m/%Y")
+        logger.info(f"Período de apuração calculado para o dia {dia_exec:02d}: {str_ini} até {str_fim}")
+        return str_ini, str_fim
+
+    def preencher_datas_e_gerar(self, data_inicial: Optional[str] = None, data_final: Optional[str] = None, timeout_janela: int = 15) -> bool:
         """
         PASSO 6:
-        1. Preencher 'Data Inicial';
-        2. Preencher 'Data Final';
-        3. Clicar no botão 'OK' (aguardar processamento de 7 a 10 min).
+        1. Aguardar o modal 'FGETENTRANCE - Valores de Entrada';
+        2. Preencher 'Data Inicial';
+        3. Preencher 'Data Final';
+        4. Clicar no botão 'OK' (aguardar processamento de 7 a 10 min).
         """
-        logger.info(f"Preenchendo período de apuração: {data_inicial} até {data_final}...")
+        # Se as datas não foram passadas, calcula automaticamente pela regra do PDD
+        if not data_inicial or not data_final:
+            data_inicial, data_final = self.calcular_periodo_pdd(dia_simulado=4)
 
-        clicou_ini = self._clicar_se_encontrar("campo_data_inicial.png", timeout=5, descricao="Campo Data Inicial")
-        if clicou_ini:
-            gui.hotkey("ctrl", "a")
-            gui.press("backspace")
-            gui.type_text(data_inicial.replace("/", ""))
-            gui.press("tab")
-            time.sleep(0.5)
-            gui.type_text(data_final.replace("/", ""))
-            time.sleep(0.5)
+        logger.info(f"Iniciando Passo 6: Preenchimento de Valores de Entrada ({data_inicial} até {data_final})...")
 
-        self._clicar_se_encontrar("botao_ok.png", timeout=5, descricao="Botão OK da tela de parâmetros")
+        # 1. Aguarda a janela 'Valores de Entrada' abrir (identificada pelo título, botão Ok ou label)
+        tpl_tit = self._obter_template("titulo_valores_entrada.png")
+        tpl_ok = self._obter_template("botao_ok_entrada.png")
+        tpl_lbl_ini = self._obter_template("label_data_inicial.png")
+        tpl_lbl_fim = self._obter_template("label_data_final.png")
+
+        pos_lbl_ini = None
+        if tpl_lbl_ini:
+            pos_lbl_ini = gui.wait_for(str(tpl_lbl_ini), timeout=timeout_janela, confidence=0.75)
+
+        if not pos_lbl_ini and tpl_tit:
+            pos_t = gui.wait_for(str(tpl_tit), timeout=5, confidence=0.75)
+            if pos_t:
+                # Ancoragem relativa: o label 'Data Inicial:' fica ~45px abaixo e ~50px à direita do título
+                pos_lbl_ini = (pos_t[0] + 50, pos_t[1] + 45)
+
+        if not pos_lbl_ini and tpl_ok:
+            pos_ok_tmp = gui.wait_for(str(tpl_ok), timeout=5, confidence=0.75)
+            if pos_ok_tmp:
+                # Ancoragem relativa a partir do botão Ok
+                pos_lbl_ini = (pos_ok_tmp[0] - 550, pos_ok_tmp[1] + 25)
+
+        if not pos_lbl_ini:
+            logger.warning("Janela 'Valores de Entrada' não encontrada após timeout.")
+            return False
+
+        logger.info(f"Janela 'Valores de Entrada' identificada! Label Data Inicial em {pos_lbl_ini}.")
+
+        # 2. Clica no campo de texto da Data Inicial (~65px à direita do label)
+        x_campo_ini = pos_lbl_ini[0] + 65
+        y_campo_ini = pos_lbl_ini[1]
+        logger.info(f"Preenchendo Campo 'Data Inicial' com '{data_inicial}' em ({x_campo_ini}, {y_campo_ini})...")
+        gui.click(x_campo_ini, y_campo_ini)
+        time.sleep(0.3)
+        gui.hotkey("ctrl", "a")
+        gui.press("backspace")
+        # Digita a data sem barras para preencher a máscara nativa do Senior
+        gui.type_text(data_inicial.replace("/", ""))
+        time.sleep(0.3)
+
+        # 3. Pressiona TAB para avançar diretamente ao campo Data Final
+        logger.info(f"Preenchendo Campo 'Data Final' com '{data_final}'...")
+        gui.press("tab")
+        time.sleep(0.3)
+        gui.hotkey("ctrl", "a")
+        gui.press("backspace")
+        gui.type_text(data_final.replace("/", ""))
+        time.sleep(0.5)
+
+        # Salva print de auditoria dos campos preenchidos
+        try:
+            print_preenchido = self.prints_dir / "07_valores_entrada_preenchidos.png"
+            gui.screenshot(save_to=str(print_preenchido))
+            logger.info(f"Print dos campos preenchidos salvo em: {print_preenchido}")
+        except Exception:
+            pass
+
+        # 4. Localiza e clica no botão 'Ok'
+        pos_ok = None
+        if tpl_ok:
+            pos_ok = gui.wait_for(str(tpl_ok), timeout=4, confidence=0.75)
+
+        if not pos_ok:
+            # Ancoragem alternativa: botão Ok fica ~550px à direita do campo Data Inicial
+            pos_ok = (x_campo_ini + 510, y_campo_ini - 20)
+
+        logger.info(f"Clicando no botão 'Ok' da janela Valores de Entrada em {pos_ok}...")
+        gui.click(pos_ok[0], pos_ok[1])
+        time.sleep(3)
+
+        # Salva print pós-clique no Ok (início do processamento)
+        try:
+            print_pos_ok = self.prints_dir / "08_inicio_processamento_relatorio.png"
+            gui.screenshot(save_to=str(print_pos_ok))
+            logger.info(f"Print pós-Ok salvo em: {print_pos_ok}")
+        except Exception:
+            pass
+
+        logger.info("Passo 6 executado com sucesso! Relatório disparado para geração.")
         return True
 
     def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Path) -> Path:
