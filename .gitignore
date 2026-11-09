@@ -26,3 +26,9 @@ data/consolidado/*.pdf
 data/individuais/*.pdf
 data/relatorios/*.xlsx
 data/relatorios/*.xls
+
+# Screenshots de auditoria e depuração em tempo de execução
+assets/prints/**/*.png
+assets/prints/*.png
+!assets/prints/**/.gitkeep
+

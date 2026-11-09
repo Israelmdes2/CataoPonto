@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     SENIOR_PASSWORD: str = ""
     SENIOR_TEMPLATES_DIR: str = str(BASE_DIR / "assets" / "templates")
     SENIOR_CONFIDENCE: float = 0.85
-    SENIOR_TIMEOUT_RELATORIO_SEGUNDOS: int = 600  # 10 min
+    SENIOR_TIMEOUT_RELATORIO_SEGUNDOS: int = 1200  # 20 min
 
     # E-mail (SMTP Office365 / Unimed)
     SMTP_HOST: str = "smtp.office365.com"
