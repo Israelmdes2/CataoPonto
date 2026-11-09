@@ -27,13 +27,3 @@
 
 # Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados
 .venv\Scripts\python.exe manage.py senior-enviar-emails
-
-
-# Passo 7: Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\HRCP702_DDMMAAAA.pdf
-.venv\Scripts\python.exe manage.py senior-aguardar-salvar
-
-# Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado (ex: 3898.pdf)
-.venv\Scripts\python.exe manage.py senior-separar-pdfs
-
-# Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados
-.venv\Scripts\python.exe manage.py senior-enviar-emails
