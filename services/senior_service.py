@@ -411,10 +411,25 @@ class SeniorService:
         gui.click(x_nome, y_nome)
         time.sleep(0.8)
 
-        # 5. Clica no botão Executar
-        logger.info(f"Clicando no botão Executar em {pos_exec}...")
-        gui.click(pos_exec[0], pos_exec[1])
-        time.sleep(3)
+        # 5. Clica no botão Executar (Anulado / Comentado a pedido do usuário - o duplo clique na linha já aciona a execução)
+        # logger.info(f"Clicando no botão Executar em {pos_exec}...")
+        # gui.click(pos_exec[0], pos_exec[1])
+
+        # 6. Monitoramento da janela Pesquisa de registro (Comentado a pedido do usuário)
+        # logger.info("Aguardando pós-Executar (verificando se 'Pesquisa de registro' aparece por até 10s)...")
+        # tpl_pesq = self._obter_template("titulo_pesquisa_registro.png")
+        # inicio_pesq = time.time()
+        # while time.time() - inicio_pesq < 10:
+        #     if tpl_pesq:
+        #         pos_pesq = gui.locate_center_on_screen(str(tpl_pesq), confidence=0.75)
+        #         if pos_pesq:
+        #             logger.warning(f"Janela 'Pesquisa de registro' detectada em {pos_pesq}! Enviando ESC para fechar...")
+        #             gui.click(pos_pesq[0], pos_pesq[1])
+        #             time.sleep(0.3)
+        #             gui.press("esc")
+        #             time.sleep(1.0)
+        #             break
+        #     time.sleep(0.5)
 
         logger.info("Passo 5 executado com sucesso!")
         return True
@@ -458,99 +473,185 @@ class SeniorService:
         logger.info(f"Período de apuração calculado para o dia {dia_exec:02d}: {str_ini} até {str_fim}")
         return str_ini, str_fim
 
-    def preencher_datas_e_gerar(self, data_inicial: Optional[str] = None, data_final: Optional[str] = None, timeout_janela: int = 15) -> bool:
+    def fechar_janela_pesquisa_registro_se_aberta(self, timeout: int = 10) -> bool:
+        """Verifica por até timeout segundos se a janela indesejada 'Pesquisa de registro' abriu e a fecha com ESC."""
+        tpl_pesq = self._obter_template("titulo_pesquisa_registro.png")
+        if not tpl_pesq:
+            return False
+
+        inicio = time.time()
+        while time.time() - inicio < timeout:
+            for conf in [0.82, 0.75, 0.70]:
+                pos_pesq = gui.locate_center_on_screen(str(tpl_pesq), confidence=conf)
+                if pos_pesq:
+                    logger.warning(f"Janela indesejada 'Pesquisa de registro' detectada em {pos_pesq}! Fechando com ESC...")
+                    gui.click(pos_pesq[0], pos_pesq[1])
+                    time.sleep(0.3)
+                    gui.press("esc")
+                    time.sleep(0.8)
+                    return True
+            time.sleep(0.5)
+        return False
+
+    def preencher_datas_e_gerar(self, data_inicial: Optional[str] = None, data_final: Optional[str] = None, timeout_janela: int = 30) -> bool:
         """
         PASSO 6:
-        1. Aguardar o modal 'FGETENTRANCE - Valores de Entrada';
-        2. Preencher 'Data Inicial';
-        3. Preencher 'Data Final';
-        4. Clicar no botão 'OK' (aguardar processamento de 7 a 10 min).
+        1. Aguardar obrigatoriamente a identificação visual da tela 'Valores de Entrada';
+        2. Somente após a tela estar aberta e identificada, clicar no campo 'Data Inicial' e digitar;
+        3. Clicar no campo 'Data Final' e digitar;
+        4. Aguardar 5 segundos para conferência visual;
+        5. Clicar no botão 'Ok'.
         """
-        # Se as datas não foram passadas, calcula automaticamente pela regra do PDD
         if not data_inicial or not data_final:
             data_inicial, data_final = self.calcular_periodo_pdd(dia_simulado=4)
 
         logger.info(f"Iniciando Passo 6: Preenchimento de Valores de Entrada ({data_inicial} até {data_final})...")
+        print(f"\n  [>] Preenchimento de Valores de Entrada no Senior:")
+        print(f"      * Data Inicial : {data_inicial}")
+        print(f"      * Data Final   : {data_final}")
 
-        # 1. Aguarda a janela 'Valores de Entrada' abrir (identificada pelo título, botão Ok ou label)
+        # 1. AGUARDA OBRIGATORIAMENTE A TELA 'VALORES DE ENTRADA' SER IDENTIFICADA
+        print("  [..] Aguardando identificação da tela 'Valores de Entrada'...")
+        logger.info("Monitorando tela até que o modal 'Valores de Entrada' seja identificado...")
+
         tpl_tit = self._obter_template("titulo_valores_entrada.png")
+        tpl_aba = self._obter_template("aba_entrada.png")
         tpl_ok = self._obter_template("botao_ok_entrada.png")
+        tpl_ok_limpo = self._obter_template("botao_ok_real_limpo.png")
         tpl_lbl_ini = self._obter_template("label_data_inicial.png")
         tpl_lbl_fim = self._obter_template("label_data_final.png")
+        tpl_box_ini = self._obter_template("campo_data_inicial_box.png")
 
-        pos_lbl_ini = None
-        if tpl_lbl_ini:
-            pos_lbl_ini = gui.wait_for(str(tpl_lbl_ini), timeout=timeout_janela, confidence=0.75)
+        pos_tela_identificada = None
+        inicio_espera = time.time()
 
-        if not pos_lbl_ini and tpl_tit:
-            pos_t = gui.wait_for(str(tpl_tit), timeout=5, confidence=0.75)
-            if pos_t:
-                # Ancoragem relativa: o label 'Data Inicial:' fica ~45px abaixo e ~50px à direita do título
-                pos_lbl_ini = (pos_t[0] + 50, pos_t[1] + 45)
+        while time.time() - inicio_espera < timeout_janela:
+            # 1.1 Tenta identificar pelo Título '- Valores de Entrada'
+            if tpl_tit:
+                for c in [0.85, 0.75, 0.65]:
+                    p = gui.locate_center_on_screen(str(tpl_tit), confidence=c)
+                    if p:
+                        pos_tela_identificada = p
+                        print(f"  [OK] Tela identificada pelo Título '- Valores de Entrada' em {p}!")
+                        break
+            if pos_tela_identificada:
+                break
 
-        if not pos_lbl_ini and tpl_ok:
-            pos_ok_tmp = gui.wait_for(str(tpl_ok), timeout=5, confidence=0.75)
-            if pos_ok_tmp:
-                # Ancoragem relativa a partir do botão Ok
-                pos_lbl_ini = (pos_ok_tmp[0] - 550, pos_ok_tmp[1] + 25)
+            # 1.2 Tenta identificar pela Aba 'Entrada'
+            if tpl_aba:
+                for c in [0.85, 0.72]:
+                    p = gui.locate_center_on_screen(str(tpl_aba), confidence=c)
+                    if p:
+                        pos_tela_identificada = p
+                        print(f"  [OK] Tela identificada pela Aba 'Entrada' em {p}!")
+                        break
+            if pos_tela_identificada:
+                break
 
-        if not pos_lbl_ini:
-            logger.warning("Janela 'Valores de Entrada' não encontrada após timeout.")
+            # 1.3 Tenta identificar pelo botão Ok
+            if tpl_ok:
+                for c in [0.85, 0.72]:
+                    p = gui.locate_center_on_screen(str(tpl_ok), confidence=c)
+                    if p:
+                        pos_tela_identificada = p
+                        print(f"  [OK] Tela identificada pelo botão Ok em {p}!")
+                        break
+            if pos_tela_identificada:
+                break
+
+            # 1.4 Tenta pelo Label 'Data Inicial'
+            if tpl_lbl_ini:
+                for c in [0.85, 0.70]:
+                    p = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=c)
+                    if p:
+                        pos_tela_identificada = p
+                        print(f"  [OK] Tela identificada pelo label Data Inicial em {p}!")
+                        break
+            if pos_tela_identificada:
+                break
+
+            time.sleep(1.0)
+
+        if not pos_tela_identificada:
+            print("  [X] Tela 'Valores de Entrada' NÃO identificada após timeout. Digitação cancelada.")
+            logger.error("Tela 'Valores de Entrada' não identificada na tela.")
             return False
 
-        logger.info(f"Janela 'Valores de Entrada' identificada! Label Data Inicial em {pos_lbl_ini}.")
+        print("  [OK] Tela 'Valores de Entrada' confirmada e pronta!")
+        print("  [..] Aguardando 5 segundos antes de começar a digitar...")
+        logger.info("Tela 'Valores de Entrada' confirmada. Aguardando 5 segundos antes de iniciar a digitação...")
+        time.sleep(5.0)
 
-        # 2. Clica no campo de texto da Data Inicial (~65px à direita do label)
-        x_campo_ini = pos_lbl_ini[0] + 65
-        y_campo_ini = pos_lbl_ini[1]
-        logger.info(f"Preenchendo Campo 'Data Inicial' com '{data_inicial}' em ({x_campo_ini}, {y_campo_ini})...")
+        # 2. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA INICIAL'
+        pos_campo_ini = None
+        if tpl_box_ini:
+            for c in [0.85, 0.70]:
+                p = gui.locate_center_on_screen(str(tpl_box_ini), confidence=c)
+                if p:
+                    pos_campo_ini = (p[0] - 15, p[1])
+                    break
+
+        if not pos_campo_ini and tpl_lbl_ini:
+            p = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=0.65)
+            if p:
+                pos_campo_ini = (p[0] + 80, p[1])
+
+        if not pos_campo_ini and tpl_ok:
+            p = gui.locate_center_on_screen(str(tpl_ok), confidence=0.65)
+            if p:
+                pos_campo_ini = (p[0] - 635, p[1] + 20)
+
+        if not pos_campo_ini:
+            # Ancoragem a partir do título identificado
+            pos_campo_ini = (pos_tela_identificada[0] - 15, pos_tela_identificada[1] + 50)
+
+        x_campo_ini, y_campo_ini = pos_campo_ini
+        print(f"  [..] Clicando no campo 'Data Inicial' em ({x_campo_ini}, {y_campo_ini}) e digitando com intervalo de 0.5s...")
+        logger.info(f"Clicando no campo Data Inicial em ({x_campo_ini}, {y_campo_ini})...")
         gui.click(x_campo_ini, y_campo_ini)
-        time.sleep(0.3)
-        gui.hotkey("ctrl", "a")
-        gui.press("backspace")
-        # Digita a data sem barras para preencher a máscara nativa do Senior
-        gui.type_text(data_inicial.replace("/", ""))
-        time.sleep(0.3)
-
-        # 3. Pressiona TAB para avançar diretamente ao campo Data Final
-        logger.info(f"Preenchendo Campo 'Data Final' com '{data_final}'...")
-        gui.press("tab")
-        time.sleep(0.3)
-        gui.hotkey("ctrl", "a")
-        gui.press("backspace")
-        gui.type_text(data_final.replace("/", ""))
+        time.sleep(0.5)
+        gui.type_text(data_inicial.replace("/", ""), interval=0.5)
+        print(f"  [OK] Campo 'Data Inicial' preenchido com sucesso: {data_inicial}")
         time.sleep(0.5)
 
-        # Salva print de auditoria dos campos preenchidos
-        try:
-            print_preenchido = self.prints_dir / "07_valores_entrada_preenchidos.png"
-            gui.screenshot(save_to=str(print_preenchido))
-            logger.info(f"Print dos campos preenchidos salvo em: {print_preenchido}")
-        except Exception:
-            pass
+        # 3. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA FINAL'
+        x_campo_fim = x_campo_ini
+        y_campo_fim = y_campo_ini + 26
+        print(f"  [..] Clicando no campo 'Data Final' em ({x_campo_fim}, {y_campo_fim}) e digitando com intervalo de 0.5s...")
+        logger.info(f"Clicando no campo Data Final em ({x_campo_fim}, {y_campo_fim})...")
+        gui.click(x_campo_fim, y_campo_fim)
+        time.sleep(0.5)
+        gui.type_text(data_final.replace("/", ""), interval=0.5)
+        print(f"  [OK] Campo 'Data Final' preenchido com sucesso:   {data_final}")
+        time.sleep(0.5)
 
-        # 4. Localiza e clica no botão 'Ok'
+        # 4. PAUSA DE 5 SEGUNDOS PARA CONFERÊNCIA VISUAL
+        print("  [..] Aguardando 5 segundos antes de clicar em Ok para conferência visual...")
+        logger.info("Aguardando 5 segundos antes de acionar o botão Ok do modal Valores de Entrada...")
+        time.sleep(5.0)
+
+        # 5. LOCALIZA E CLICA NO BOTÃO 'OK' DO MODAL VALORES DE ENTRADA
         pos_ok = None
-        if tpl_ok:
-            pos_ok = gui.wait_for(str(tpl_ok), timeout=4, confidence=0.75)
+        for tpl in [tpl_ok, tpl_ok_limpo]:
+            if tpl and not pos_ok:
+                for conf in [0.85, 0.70, 0.55]:
+                    p = gui.locate_center_on_screen(str(tpl), confidence=conf)
+                    if p:
+                        pos_ok = p
+                        break
 
-        if not pos_ok:
-            # Ancoragem alternativa: botão Ok fica ~550px à direita do campo Data Inicial
-            pos_ok = (x_campo_ini + 510, y_campo_ini - 20)
+        if pos_ok:
+            logger.info(f"Botão 'Ok' visual localizado em {pos_ok}! Clicando...")
+            gui.click(pos_ok[0], pos_ok[1])
+            print(f"  [OK] Botão 'Ok' clicado com sucesso!")
+        else:
+            logger.info("Acionando botão 'Ok' via atalho universal do Delphi (Alt+O)...")
+            gui.hotkey("alt", "o")
+            print(f"  [OK] Botão 'Ok' acionado via atalho Alt+O!")
 
-        logger.info(f"Clicando no botão 'Ok' da janela Valores de Entrada em {pos_ok}...")
-        gui.click(pos_ok[0], pos_ok[1])
-        time.sleep(3)
+        time.sleep(2.5)
 
-        # Salva print pós-clique no Ok (início do processamento)
-        try:
-            print_pos_ok = self.prints_dir / "08_inicio_processamento_relatorio.png"
-            gui.screenshot(save_to=str(print_pos_ok))
-            logger.info(f"Print pós-Ok salvo em: {print_pos_ok}")
-        except Exception:
-            pass
-
-        logger.info("Passo 6 executado com sucesso! Relatório disparado para geração.")
+        logger.info(f"Passo 6 executado com sucesso! Relatório disparado para geração ({data_inicial} até {data_final}).")
         return True
 
     def aguardar_arquivo_pdf_estabilizado(
@@ -755,35 +856,82 @@ class SeniorService:
         tpl_tit_rel = self._obter_template("titulo_visualizacao_relatorio.png")
         tpl_vis = self._obter_template("barra_visualizar_100.png")
         tpl_btn_salvar = self._obter_template("botao_salvar_dialogo.png")
+        tpl_aguarde = self._obter_template("modal_aguarde_preparando.png")
 
         inicio = time.time()
         pos_disquete = None
+        modal_aguarde_detectado = False
+        ultimo_log_segundo = -1
 
-        # 2. Polling até a janela do relatório abrir
-        while time.time() - inicio < timeout_max:
+        print(f"\n  [..] Monitorando geração do relatório (timeout máximo: {timeout_max//60} min)...")
+
+        # 2. Estratégia Principal: Aguarda o modal 'Aguarde, preparando a solicitação ...' SUMIR (sem limite de 20 min)
+        print("\n  [..] Monitorando geração do relatório: aguardando o modal 'Aguarde...' sumir da tela...")
+        logger.info("Iniciando monitoramento: aguardando até o modal 'Aguarde, preparando a solicitação ...' sumir.")
+
+        # Confirma se o modal apareceu
+        modal_aguarde_detectado = False
+        for _ in range(8):
+            if tpl_aguarde and gui.locate_center_on_screen(str(tpl_aguarde), confidence=0.75):
+                modal_aguarde_detectado = True
+                print("  [..] Modal 'Aguarde, preparando a solicitação ...' confirmado na tela!")
+                logger.info("Modal 'Aguarde, preparando a solicitação ...' detectado. Aguardando sumir...")
+                break
+            time.sleep(1.0)
+
+        # Loop contínuo: aguarda até o modal SUMIR (sem timeout fixo)
+        inicio = time.time()
+        ultimo_log_segundo = -1
+        while True:
+            # 2.1 Verifica se o modal ainda está visível na tela
+            modal_visivel = False
+            if tpl_aguarde:
+                pos_aguarde = gui.locate_center_on_screen(str(tpl_aguarde), confidence=0.78)
+                if pos_aguarde:
+                    modal_visivel = True
+                    modal_aguarde_detectado = True
+
+            # 2.2 Se o modal estava ativo e agora SUMIU da tela: geração concluída!
+            if modal_aguarde_detectado and not modal_visivel:
+                print("\n  [OK] O modal 'Aguarde, preparando a solicitação ...' SUMIU da tela!")
+                print("  [OK] Processamento do Senior concluído! Avançando para salvar o relatório...")
+                logger.info("Modal 'Aguarde' sumiu da tela! Relatório concluído.")
+                time.sleep(2.0)
+                gui.focar_janela("Visualização do Relatório")
+                time.sleep(0.5)
+                # Localiza o disquete para salvar
+                if tpl_disquete:
+                    for c in [0.82, 0.70, 0.58]:
+                        pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=c)
+                        if pos_disquete:
+                            break
+                if not pos_disquete and tpl_tit_rel:
+                    pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.65)
+                    if pos_tit:
+                        pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
+                break
+
+            # 2.3 Verificação concorrente: se o disquete ou a tela de visualização já surgiram
             if tpl_disquete:
                 pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.75)
                 if pos_disquete:
-                    logger.info(f"Ícone de Salvar (Disquete) detectado em: {pos_disquete}!")
+                    print("  [OK] Ícone do Disquete detectado na tela!")
                     break
 
             if tpl_tit_rel:
                 pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.75)
                 if pos_tit:
-                    logger.info("Título 'Visualização do Relatório' detectado!")
                     pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
-                    break
-
-            if tpl_vis:
-                pos_vis = gui.locate_center_on_screen(str(tpl_vis), confidence=0.75)
-                if pos_vis:
-                    logger.info(f"Barra de ferramentas do relatório detectada em {pos_vis}!")
-                    pos_disquete = (pos_vis[0] + 62, pos_vis[1])
+                    print("  [OK] Janela de Visualização do Relatório detectada!")
                     break
 
             tempo_decorrido = int(time.time() - inicio)
-            if tempo_decorrido % 15 == 0:
-                logger.info(f"Aguardando geração do relatório no Senior... ({tempo_decorrido}s decorridos)")
+            if tempo_decorrido % 15 == 0 and tempo_decorrido != ultimo_log_segundo:
+                ultimo_log_segundo = tempo_decorrido
+                minutos = tempo_decorrido // 60
+                segundos = tempo_decorrido % 60
+                logger.info(f"Senior compilando relatório de ponto... ({minutos}m {segundos}s decorridos)")
+                print(f"  [..] Senior processando... ({minutos}m {segundos}s decorridos)")
 
             time.sleep(2)
 

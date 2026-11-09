@@ -1051,11 +1051,19 @@ def _disparar_senior(ambiente: str = "homologacao") -> bool:
     return False
 
 
+def _val(param, default=None):
+    """Extrai valor real se o parâmetro for typer.models.OptionInfo (chamada Python direta)."""
+    if hasattr(param, "default"):
+        return param.default
+    return param if param is not None else default
+
+
 @app.command("senior-open")
 def senior_open(
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
 ):
     """Abre o sistema Senior (Controle de Ponto e Refeitório)."""
+    ambiente = _val(ambiente, "homologacao")
     _sec(f"Abertura do Senior ({ambiente})")
     if _disparar_senior(ambiente):
         _ok("Executável do Senior disparado com sucesso.")
@@ -1070,7 +1078,7 @@ def senior_login(
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout: int = typer.Option(20, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
+    timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual (0.1 a 1.0)"),
 ):
     """Realiza o login no sistema Senior por imagem (OpenCV + PyAutoGUI)."""
@@ -1078,6 +1086,13 @@ def senior_login(
     from pathlib import Path
     from core.config import settings
     from infrastructure.automation import gui
+
+    usuario = _val(usuario, "")
+    senha = _val(senha, "")
+    abrir = _val(abrir, True)
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 60)
+    confidence = _val(confidence, 0.75)
 
     _sec("Autenticação Senior Desktop (OpenCV + PyAutoGUI)")
 
@@ -1127,8 +1142,15 @@ def senior_login(
             gui.click(pos_mod[0], pos_mod[1])
             time.sleep(2)
 
-    _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s)...")
-    pos_btn = gui.wait_for(str(tpl_btn), timeout=float(timeout), confidence=confidence)
+    _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s / 1 minuto)...")
+    pos_btn = None
+    inicio_login = time.time()
+    while time.time() - inicio_login < float(timeout):
+        pos_btn = gui.locate_center_on_screen(str(tpl_btn), confidence=confidence)
+        if pos_btn:
+            break
+        gui.focar_senior_geral()
+        time.sleep(1.2)
 
     if not pos_btn:
         screenshot_fail = prints_dir / "erro_login_nao_encontrado.png"
@@ -1394,6 +1416,9 @@ def senior_selecionar_702(
     """Passo 5: Desce a rolagem na Seleção de Modelos, seleciona o 702 e clica em Executar."""
     from services.senior_service import SeniorService
 
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 15)
+
     _sec(f"Passo 5: Seleção de Relatório 702 ({ambiente})")
     service = SeniorService(ambiente=ambiente)
     if service.selecionar_relatorio_702(timeout_janela=timeout):
@@ -1413,10 +1438,20 @@ def senior_valores_entrada(
     """Passo 6: Preenche Data Inicial e Final no modal Valores de Entrada e clica em Ok."""
     from services.senior_service import SeniorService
 
+    data_inicial = _val(data_inicial, "")
+    data_final = _val(data_final, "")
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 15)
+
     _sec(f"Passo 6: Preenchimento de Valores de Entrada ({ambiente})")
     service = SeniorService(ambiente=ambiente)
-    if service.preencher_datas_e_gerar(data_inicial=data_inicial or None, data_final=data_final or None, timeout_janela=timeout):
-        _ok("Passo 6 executado com sucesso: Datas preenchidas e botão Ok clicado!")
+    if not data_inicial or not data_final:
+        data_inicial, data_final = service.calcular_periodo_pdd(dia_simulado=4)
+    _info(f"Valores para preenchimento:")
+    _info(f"    • Data Inicial: {data_inicial}")
+    _info(f"    • Data Final:   {data_final}")
+    if service.preencher_datas_e_gerar(data_inicial=data_inicial, data_final=data_final, timeout_janela=timeout):
+        _ok(f"Passo 6 executado com sucesso: Data Inicial [{data_inicial}] e Data Final [{data_final}] preenchidas e botão Ok clicado!")
     else:
         _err("Falha ao preencher Valores de Entrada.")
         raise typer.Exit(1)
@@ -1426,10 +1461,14 @@ def senior_valores_entrada(
 def senior_aguardar_salvar(
     destino: str = typer.Option("", "--destino", "-d", help="Caminho do arquivo PDF destino (padrão: V:\\grp-aud-doc\\DIGITALY_CARTAO_PONTO)"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
+    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
 ):
     """Passo 7: Aguarda a janela de visualização do relatório, clica no disquete e salva na rede."""
     from services.senior_service import SeniorService
+
+    destino = _val(destino, "")
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 1200)
 
     _sec(f"Passo 7: Aguardo e Salvamento do Relatório ({ambiente})")
     service = SeniorService(ambiente=ambiente)
@@ -1450,11 +1489,19 @@ def senior_fluxo(
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout: int = typer.Option(25, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
+    timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
     selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Modelo 702 + Executar)"),
 ):
     """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo 702."""
+    usuario = _val(usuario, "")
+    senha = _val(senha, "")
+    abrir = _val(abrir, True)
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 60)
+    confidence = _val(confidence, 0.70)
+    selecionar_702 = _val(selecionar_702, True)
+
     _sec(f"Fluxo Geral Senior: Login + Navegação + Modelo 702 ({ambiente})")
     
     # 1. Executa o Login
@@ -1490,9 +1537,13 @@ def senior_fluxo(
             _ok("Etapa 3 concluída com sucesso (Modelo 702 selecionado e Executar clicado)!")
             
             # 5. Executa o Preenchimento de Valores de Entrada (Passo 6 - Simulação Dia 04)
-            _info("Etapa 4: Preenchendo Valores de Entrada (Passo 6 - Simulação Dia 04)...")
-            if srv.preencher_datas_e_gerar(timeout_janela=15):
-                _ok("Etapa 4 concluída com sucesso (Datas preenchidas e botão Ok acionado)!")
+            data_ini_calc, data_fim_calc = srv.calcular_periodo_pdd(dia_simulado=4)
+            _info(f"Etapa 4: Preenchendo Valores de Entrada (Passo 6 - Simulação Dia 04)...")
+            _info(f"Valores definidos para o período:")
+            _info(f"    • Data Inicial: {data_ini_calc}")
+            _info(f"    • Data Final:   {data_fim_calc}")
+            if srv.preencher_datas_e_gerar(data_inicial=data_ini_calc, data_final=data_fim_calc, timeout_janela=15):
+                _ok(f"Etapa 4 concluída! Valores preenchidos: Data Inicial [{data_ini_calc}] e Data Final [{data_fim_calc}] -> Botão Ok acionado!")
                 
                 # 6. Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO (Passo 7)
                 _info("Etapa 5: Aguardando relatório ser gerado e salvando na rede (Passo 7)...")
@@ -1501,12 +1552,19 @@ def senior_fluxo(
                     _ok(f"Etapa 5 concluída com sucesso! Relatório consolidado salvo em: {arq_salvo}")
                     
                     # 7. Separação dos Cartões Individuais por Código de Empregado (Passo 8)
-                    _info("Etapa 6: Separando cartões individuais por código de empregado (Passo 8)...")
+                    from core.config import settings
                     from services.pdf_splitter_service import PdfSplitterService
+                    
+                    # Salva estritamente dentro da subpasta 'individuais' da pasta da data do consolidado
+                    pasta_individuais_dia = arq_salvo.parent / "individuais"
+                    pasta_individuais_dia.mkdir(parents=True, exist_ok=True)
+
+                    _info(f"Etapa 6: Separando cartões individuais em '{pasta_individuais_dia}' (Passo 8)...")
                     mapa_individuais = PdfSplitterService.dividir_cartoes_ponto(
                         caminho_consolidado=arq_salvo,
+                        pasta_destino=pasta_individuais_dia,
                     )
-                    _ok(f"Etapa 6 concluída! {len(mapa_individuais)} cartões individuais gerados.")
+                    _ok(f"Etapa 6 concluída! {len(mapa_individuais)} cartões individuais gerados em: {pasta_individuais_dia}")
 
                     # 8. Identificação na Planilha e Disparo de E-mails (Passo 10)
                     _info("Etapa 7: Identificando colaboradores na planilha e enviando e-mails (Passo 10)...")
@@ -1560,9 +1618,11 @@ def senior_fluxo(
 
                     # Gera o Relatório de Controle em Excel conforme PDD
                     try:
+                        pasta_relatorios_dia = arq_salvo.parent / "relatorios"
+                        pasta_relatorios_dia.mkdir(parents=True, exist_ok=True)
                         relatorio_path = RelatorioService().gerar_relatorio_execucao(
                             registros=registros_execucao,
-                            pasta_destino=settings.REDE_PASTA_RELATORIOS,
+                            pasta_destino=pasta_relatorios_dia,
                             momento_execucao=datetime.now(),
                         )
                         _ok(f"Relatório de Execução gerado com sucesso em: {relatorio_path}")
@@ -1584,7 +1644,7 @@ def senior_fluxo(
 def senior_separar_pdfs(
     consolidado: str = typer.Option("", "--consolidado", "-c", help="Caminho do arquivo consolidado PDF"),
     destino: str = typer.Option("", "--destino", "-d", help="Pasta de destino dos PDFs individuais"),
-    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout para aguardar o arquivo ser carregado e virar PDF"),
+    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout para aguardar o arquivo ser carregado e virar PDF"),
 ):
     """Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado."""
     from services.pdf_splitter_service import PdfSplitterService
