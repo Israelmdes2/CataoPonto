@@ -1698,6 +1698,7 @@ def senior_enviar_emails(
     modo: str = typer.Option("04", "--modo", "-m", help="Modo do PDD: 04, 20 ou 30"),
     pasta_individuais: str = typer.Option("", "--individuais", "-i", help="Pasta contendo os PDFs individuais"),
     planilha: str = typer.Option("", "--planilha", "-p", help="Caminho da planilha de colaboradores"),
+    matricula: str = typer.Option("", "--matricula", "-mat", help="Filtra por matrícula específica para teste"),
 ):
     """Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados."""
     from services.colaboradores_service import ColaboradoresService
@@ -1720,16 +1721,29 @@ def senior_enviar_emails(
     else:
         pasta_indiv = Path(settings.REDE_PASTA_INDIVIDUAIS)
 
-    pasta_rel = (pasta_dia / "relatorios") if pasta_dia.exists() else Path(settings.REDE_PASTA_RELATORIOS)
-    pasta_rel.mkdir(parents=True, exist_ok=True)
+    if not pasta_indiv.exists() and Path("data/individuais").exists():
+        pasta_indiv = Path("data/individuais")
 
-    arq_planilha = planilha or settings.PLANILHA_COLABORADORES_PATH
+    pasta_rel = (pasta_dia / "relatorios") if pasta_dia.exists() else Path(settings.REDE_PASTA_RELATORIOS)
+    try:
+        pasta_rel.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        _warn(f"Pasta de rede inacessível ({pasta_rel}). Usando pasta local 'data/relatorios'...")
+        pasta_rel = Path("data/relatorios")
+        pasta_rel.mkdir(parents=True, exist_ok=True)
+
+    arq_planilha = _val(planilha, "") or settings.PLANILHA_COLABORADORES_PATH
 
     _info(f"Pasta de cartões individuais: {pasta_indiv}")
     _info(f"Planilha de colaboradores: {arq_planilha}")
 
     colaboradores = ColaboradoresService.carregar_colaboradores(arq_planilha)
-    _info(f"Total de {len(colaboradores)} colaboradores cadastrados para envio.")
+    mat_filtro = _val(matricula, "").strip()
+    if mat_filtro:
+        colaboradores = [c for c in colaboradores if str(c.matricula).strip() == mat_filtro]
+        _info(f"Filtro por matrícula aplicado: '{mat_filtro}' ({len(colaboradores)} colaborador encontrado).")
+
+    _info(f"Total de {len(colaboradores)} colaboradores selecionados para envio.")
 
     total_envios = 0
     total_erros = 0

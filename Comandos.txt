@@ -26,4 +26,11 @@
 .venv\Scripts\python.exe manage.py senior-separar-pdfs
 
 # Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados
+# - Disparar para todos os colaboradores:
 .venv\Scripts\python.exe manage.py senior-enviar-emails
+
+# - Testar apenas UMA matrícula específica (ex: 4821):
+.venv\Scripts\python.exe manage.py senior-enviar-emails --matricula 4821
+
+# - Testar apontando para uma pasta específica de PDFs individuais:
+.venv\Scripts\python.exe manage.py senior-enviar-emails --individuais "data/individuais" --matricula 4821
