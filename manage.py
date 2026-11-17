@@ -1015,7 +1015,7 @@ def automate_play(
 
 
 # ── Senior Automation Commands ─────────────────────────────
-def _disparar_senior(ambiente: str = "homologacao") -> bool:
+def _disparar_senior(ambiente: str = "producao") -> bool:
     """
     Dispara o executável Iniciar.exe do Senior diretamente com argumentos de módulo,
     sem abrir pastas ou janelas do Explorer na frente.
@@ -1060,10 +1060,10 @@ def _val(param, default=None):
 
 @app.command("senior-open")
 def senior_open(
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
 ):
     """Abre o sistema Senior (Controle de Ponto e Refeitório)."""
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     _sec(f"Abertura do Senior ({ambiente})")
     if _disparar_senior(ambiente):
         _ok("Executável do Senior disparado com sucesso.")
@@ -1077,7 +1077,7 @@ def senior_login(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar a tela de login (segundos)"),
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual (0.1 a 1.0)"),
 ):
@@ -1090,7 +1090,7 @@ def senior_login(
     usuario = _val(usuario, "")
     senha = _val(senha, "")
     abrir = _val(abrir, True)
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 60)
     confidence = _val(confidence, 0.75)
 
@@ -1181,7 +1181,12 @@ def senior_login(
 
     gui.press("tab")
     time.sleep(0.3)
-    gui.type_text(pwd)
+    gui.hotkey("ctrl", "a")
+    gui.press("backspace")
+    pyperclip.copy(pwd)
+    gui.hotkey("ctrl", "v")
+    time.sleep(0.2)
+    pyperclip.copy("")
     _ok("Senha inserida.")
 
     time.sleep(0.5)
@@ -1237,7 +1242,7 @@ def senior_login(
 
 @app.command("senior-calculos")
 def senior_calculos(
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout para localizar a aba Cálculos"),
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Confiança da detecção visual"),
 ):
@@ -1289,7 +1294,7 @@ def senior_calculos(
 @app.command("senior-click")
 def senior_click(
     template: str = typer.Argument(..., help="Nome do template PNG (ex: menu_apuracao, menu_calculos)"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout de localização"),
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
 ):
@@ -1340,7 +1345,7 @@ def senior_click(
 
 @app.command("senior-menu-cartao")
 def senior_menu_cartao(
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout_passo: int = typer.Option(20, "--timeout", "-t", help="Timeout para cada clique de menu"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
 ):
@@ -1410,13 +1415,13 @@ def senior_menu_cartao(
 
 @app.command("senior-selecionar-702")
 def senior_selecionar_702(
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
 ):
     """Passo 5: Desce a rolagem na Seleção de Modelos, seleciona o 702 e clica em Executar."""
     from services.senior_service import SeniorService
 
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 15)
 
     _sec(f"Passo 5: Seleção de Relatório 702 ({ambiente})")
@@ -1430,13 +1435,13 @@ def senior_selecionar_702(
 
 @app.command("senior-selecionar-001")
 def senior_selecionar_001(
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
 ):
     """Passo 5: Localiza na Seleção de Modelos a opção 001 ('Cartão Ponto Simples') e clica para executar."""
     from services.senior_service import SeniorService
 
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 15)
 
     _sec(f"Passo 5: Seleção de Relatório 001 ({ambiente})")
@@ -1452,7 +1457,7 @@ def senior_selecionar_001(
 def senior_valores_entrada(
     data_inicial: str = typer.Option("", "--data-inicial", "-i", help="Data inicial dd/mm/aaaa (calculada pelo PDD se omitida)"),
     data_final: str = typer.Option("", "--data-final", "-f", help="Data final dd/mm/aaaa (calculada pelo PDD se omitida)"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar o modal"),
 ):
     """Passo 6: Preenche Data Inicial e Final no modal Valores de Entrada e clica em Ok."""
@@ -1460,7 +1465,7 @@ def senior_valores_entrada(
 
     data_inicial = _val(data_inicial, "")
     data_final = _val(data_final, "")
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 15)
 
     _sec(f"Passo 6: Preenchimento de Valores de Entrada ({ambiente})")
@@ -1480,7 +1485,7 @@ def senior_valores_entrada(
 @app.command("senior-aguardar-salvar")
 def senior_aguardar_salvar(
     destino: str = typer.Option("", "--destino", "-d", help="Caminho do arquivo PDF destino (padrão: V:\\grp-aud-doc\\DIGITALY_CARTAO_PONTO)"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
     modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
@@ -1488,9 +1493,10 @@ def senior_aguardar_salvar(
     from services.senior_service import SeniorService
 
     destino = _val(destino, "")
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 1200)
     modelo_str = str(_val(modelo, "702")).strip().zfill(3)
+    enviar_emails = _val(enviar_emails, True)
 
     _sec(f"Passo 7: Aguardo e Salvamento do Relatório Modelo {modelo_str} ({ambiente})")
     service = SeniorService(ambiente=ambiente)
@@ -1511,17 +1517,18 @@ def senior_fluxo(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
     selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Seleção do Modelo)"),
     modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
+    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs individuais"),
 ):
     """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo (702 ou 001)."""
     usuario = _val(usuario, "")
     senha = _val(senha, "")
     abrir = _val(abrir, True)
-    ambiente = _val(ambiente, "homologacao")
+    ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 60)
     confidence = _val(confidence, 0.70)
     selecionar_702 = _val(selecionar_702, True)
@@ -1603,69 +1610,72 @@ def senior_fluxo(
                     _ok(f"Etapa 6 concluída! {len(mapa_individuais)} cartões individuais gerados em: {pasta_individuais_dia}")
 
                     # 8. Identificação na Planilha e Disparo de E-mails (Passo 10)
-                    _info("Etapa 7: Identificando colaboradores na planilha e enviando e-mails (Passo 10)...")
-                    from services.colaboradores_service import ColaboradoresService
-                    from services.email_service import EmailService
-                    from services.relatorio_service import RelatorioService
-                    from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
-                    from datetime import datetime
+                    if not enviar_emails:
+                        _info("Etapa 7 ignorada: fluxo configurado para parar após separar os PDFs individuais (sem envio de e-mails).")
+                    else:
+                        _info("Etapa 7: Identificando colaboradores na planilha e enviando e-mails (Passo 10)...")
+                        from services.colaboradores_service import ColaboradoresService
+                        from services.email_service import EmailService
+                        from services.relatorio_service import RelatorioService
+                        from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
+                        from datetime import datetime
 
-                    colaboradores = ColaboradoresService.carregar_colaboradores()
-                    total_envios = 0
-                    total_erros = 0
-                    registros_execucao = []
-                    agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        colaboradores = ColaboradoresService.carregar_colaboradores()
+                        total_envios = 0
+                        total_erros = 0
+                        registros_execucao = []
+                        agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-                    for c in colaboradores:
-                        pdf_path = mapa_individuais.get(c.matricula)
-                        reg = RegistroExecucaoColaborador(
-                            data_execucao=agora_str,
-                            matricula=c.matricula,
-                            colaborador=c.nome,
-                            email=c.email,
-                            status=StatusExecucao.PENDENTE,
-                            motivo_erro="",
-                        )
-
-                        if not pdf_path or not Path(pdf_path).exists():
-                            reg.status = StatusExecucao.ERRO
-                            reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado."
-                            total_erros += 1
-                            registros_execucao.append(reg)
-                            continue
-
-                        try:
-                            EmailService.enviar_cartao_ponto(
-                                destinatario_email=c.email,
-                                nome_colaborador=c.nome,
-                                caminho_pdf_anexo=pdf_path,
-                                modo="04",
+                        for c in colaboradores:
+                            pdf_path = mapa_individuais.get(c.matricula)
+                            reg = RegistroExecucaoColaborador(
+                                data_execucao=agora_str,
+                                matricula=c.matricula,
+                                colaborador=c.nome,
+                                email=c.email,
+                                status=StatusExecucao.PENDENTE,
+                                motivo_erro="",
                             )
-                            reg.status = StatusExecucao.SUCESSO
-                            total_envios += 1
-                            _ok(f"E-mail enviado para {c.nome} ({c.email}) | Anexo: {pdf_path.name}")
-                        except Exception as ex_mail:
-                            reg.status = StatusExecucao.ERRO
-                            reg.motivo_erro = str(ex_mail)
-                            total_erros += 1
-                            _warn(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
 
-                        registros_execucao.append(reg)
+                            if not pdf_path or not Path(pdf_path).exists():
+                                reg.status = StatusExecucao.ERRO
+                                reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado."
+                                total_erros += 1
+                                registros_execucao.append(reg)
+                                continue
 
-                    # Gera o Relatório de Controle em Excel conforme PDD
-                    try:
-                        pasta_relatorios_dia = arq_salvo.parent / "relatorios"
-                        pasta_relatorios_dia.mkdir(parents=True, exist_ok=True)
-                        relatorio_path = RelatorioService().gerar_relatorio_execucao(
-                            registros=registros_execucao,
-                            pasta_destino=pasta_relatorios_dia,
-                            momento_execucao=datetime.now(),
-                        )
-                        _ok(f"Relatório de Execução gerado com sucesso em: {relatorio_path}")
-                    except Exception as ex_rel:
-                        _warn(f"Aviso ao gerar relatório de execução: {ex_rel}")
+                            try:
+                                EmailService.enviar_cartao_ponto(
+                                    destinatario_email=c.email,
+                                    nome_colaborador=c.nome,
+                                    caminho_pdf_anexo=pdf_path,
+                                    modo="04",
+                                )
+                                reg.status = StatusExecucao.SUCESSO
+                                total_envios += 1
+                                _ok(f"E-mail enviado para {c.nome} ({c.email}) | Anexo: {pdf_path.name}")
+                            except Exception as ex_mail:
+                                reg.status = StatusExecucao.ERRO
+                                reg.motivo_erro = str(ex_mail)
+                                total_erros += 1
+                                _warn(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
 
-                    _ok(f"Etapa 7 concluída! {total_envios} e-mails enviados com sucesso ({total_erros} erros).")
+                            registros_execucao.append(reg)
+
+                        # Gera o Relatório de Controle em Excel conforme PDD
+                        try:
+                            pasta_relatorios_dia = arq_salvo.parent / "relatorios"
+                            pasta_relatorios_dia.mkdir(parents=True, exist_ok=True)
+                            relatorio_path = RelatorioService().gerar_relatorio_execucao(
+                                registros=registros_execucao,
+                                pasta_destino=pasta_relatorios_dia,
+                                momento_execucao=datetime.now(),
+                            )
+                            _ok(f"Relatório de Execução gerado com sucesso em: {relatorio_path}")
+                        except Exception as ex_rel:
+                            _warn(f"Aviso ao gerar relatório de execução: {ex_rel}")
+
+                        _ok(f"Etapa 7 concluída! {total_envios} e-mails enviados com sucesso ({total_erros} erros).")
                 else:
                     _warn("Aviso na Etapa 5: Relatório não foi salvo automaticamente.")
             else:
@@ -1690,9 +1700,10 @@ def senior_fluxo_001(
     usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
     senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
     abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
-    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
+    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs individuais"),
 ):
     """Executa o fluxo completo ponta a ponta utilizando o Modelo 001 ('Cartão Ponto Simples')."""
     senior_fluxo(
@@ -1704,6 +1715,31 @@ def senior_fluxo_001(
         confidence=confidence,
         selecionar_702=True,
         modelo="001",
+        enviar_emails=enviar_emails,
+    )
+
+
+@app.command("senior-extrair")
+def senior_extrair(
+    usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
+    senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
+    abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
+    ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
+    confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
+    modelo: str = typer.Option("001", "--modelo", "-mod", help="Modelo do relatório: 001 ou 702"),
+):
+    """Executa o fluxo até separar os PDFs individuais (Fecha o Senior via PID e NÃO envia e-mails)."""
+    senior_fluxo(
+        usuario=usuario,
+        senha=senha,
+        abrir=abrir,
+        ambiente=ambiente,
+        timeout=timeout,
+        confidence=confidence,
+        selecionar_702=True,
+        modelo=modelo,
+        enviar_emails=False,
     )
 
 @app.command("senior-fechar")

@@ -22,7 +22,7 @@ def _subtrair_meses(ano: int, mes: int, meses_a_subtrair: int) -> Tuple[int, int
 
 
 class SeniorService:
-    def __init__(self, ambiente: str = "homologacao"):
+    def __init__(self, ambiente: str = "producao"):
         self.ambiente = "homologacao" if "homolog" in ambiente.lower() else "producao"
         self.templates_dir = Path(settings.SENIOR_TEMPLATES_DIR)
         self.confidence = settings.SENIOR_CONFIDENCE
@@ -193,7 +193,7 @@ class SeniorService:
             logger.error(f"Erro ao tentar localizar visualmente '{desc}': {e}")
             return False
 
-    def abrir_sistema_senior(self, ambiente: str = "homologacao") -> bool:
+    def abrir_sistema_senior(self, ambiente: str = "producao") -> bool:
         """Dispara o Senior diretamente sem abrir pastas do Explorer."""
         logger.info(f"Iniciando Senior ({ambiente}) diretamente pelo executável...")
         is_hml = "homolog" in ambiente.lower()
@@ -383,7 +383,12 @@ class SeniorService:
                 gui.hotkey("ctrl", "v")
                 gui.press("tab")
                 time.sleep(0.5)
-                gui.type_text(password)
+                gui.hotkey("ctrl", "a")
+                gui.press("backspace")
+                pyperclip.copy(password)
+                gui.hotkey("ctrl", "v")
+                time.sleep(0.2)
+                pyperclip.copy("")
                 time.sleep(0.5)
                 gui.click(pos_btn[0], pos_btn[1])
                 time.sleep(5)
@@ -1050,11 +1055,23 @@ class SeniorService:
                     print("  [OK] Ícone do Disquete detectado na tela!")
                     break
 
-            if tpl_tit_rel:
-                pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.75)
+            if tpl_tit_rel and (modal_aguarde_detectado is False or not modal_visivel):
+                pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.78)
                 if pos_tit:
-                    pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
-                    print("  [OK] Janela de Visualização do Relatório detectada!")
+                    print("  [OK] Janela de Visualização do Relatório detectada! Localizando ícone do disquete...")
+                    time.sleep(1.5)
+                    gui.focar_janela("Visualização do Relatório")
+                    if tpl_disquete:
+                        for _ in range(5):
+                            for c in [0.85, 0.75, 0.65]:
+                                pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=c)
+                                if pos_disquete:
+                                    break
+                            if pos_disquete:
+                                break
+                            time.sleep(0.8)
+                    if not pos_disquete:
+                        pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
                     break
 
             tempo_decorrido = int(time.time() - inicio)
@@ -1076,11 +1093,33 @@ class SeniorService:
         gui.focar_janela("Visualização do Relatório")
         time.sleep(0.5)
 
+        print(f"  [..] Clicando no ícone de Salvar (Disquete) em {pos_disquete}...")
         logger.info(f"Clicando no ícone do disquete (Salvar) em {pos_disquete}...")
         gui.click(pos_disquete[0], pos_disquete[1])
-        time.sleep(2)
+        time.sleep(2.0)
+
+        # Confirma se a janela 'Salvar como' realmente abriu; se não, tenta clicar novamente no disquete ou Ctrl+S
+        abriu_salvar = False
+        if tpl_btn_salvar:
+            for _ in range(4):
+                if gui.locate_center_on_screen(str(tpl_btn_salvar), confidence=0.70):
+                    abriu_salvar = True
+                    break
+                time.sleep(0.5)
+        if not abriu_salvar:
+            print("  [..] Reenviando clique no ícone Salvar / Ctrl+S para abrir diálogo...")
+            if tpl_disquete:
+                p_nova = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.65)
+                if p_nova:
+                    gui.click(p_nova[0], p_nova[1])
+                else:
+                    gui.hotkey("ctrl", "s")
+            else:
+                gui.hotkey("ctrl", "s")
+            time.sleep(2.0)
 
         # 4. Navega obrigatoriamente para dentro da pasta da data (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026)
+        print(f"  [..] Preenchendo pasta destino e salvando como PDF: {arquivo_final.name}...")
         logger.info(f"Navegando o diálogo Salvar como para a pasta da data: '{pasta_destino}'...")
         gui.hotkey("alt", "n")
         time.sleep(0.3)
@@ -1133,6 +1172,7 @@ class SeniorService:
         time.sleep(2)
 
         # 8. Aguarda o arquivo ser totalmente carregado na pasta, virar .pdf real e estabilizar o tamanho
+        print(f"  [..] Aguardando arquivo PDF '{arquivo_final.name}' ser gravado e estabilizado em '{pasta_destino}'...")
         logger.info(f"Aguardando arquivo ser gerado e estabilizado como PDF em '{pasta_destino}'...")
         arquivo_validado = self.aguardar_arquivo_pdf_estabilizado(
             pasta=pasta_destino,
