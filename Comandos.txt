@@ -1,36 +1,34 @@
-# ==============================================================================
-# COMANDOS RPA - PROJETO RH ENVIO DE CARTÃO PONTO (UNIMED VALE DO AÇO)
-# ==============================================================================
 
-# FLUXO COMPLETO (Passos 1 ao 10): Login -> Menus -> Modelo 702 -> Datas -> Salvar Consolidado -> Separar PDFs -> Envio de E-mails
-.venv\Scripts\python.exe manage.py senior-fluxo
+001
+# - Fluxo completo usando o Modelo 001 ('Cartão Ponto Simples'):
+.venv\Scripts\python.exe manage.py senior-fluxo-001
 
-# COMANDOS MODULARES (Passo a Passo):
 
-# Passo 1 ao 3: Login no Senior Desktop
-.venv\Scripts\python.exe manage.py senior-login
-
-# Passo 4: Navegação de Menus (Cálculos -> Apuração -> Listar -> Cartão Ponto)
-.venv\Scripts\python.exe manage.py senior-menu-cartao
-
-# Passo 5: Seleção estrita do Modelo 702 e Executar
-.venv\Scripts\python.exe manage.py senior-selecionar-702
-
-# Passo 6: Preenchimento das Datas no modal Valores de Entrada (Simulação Dia 04)
+#TELA DE Datas
 .venv\Scripts\python.exe manage.py senior-valores-entrada
 
-# Passo 7: Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\HRCP702_DDMMAAAA.pdf
-.venv\Scripts\python.exe manage.py senior-aguardar-salvar
+#TELA SALVAR CONSOLIDADO
+.venv\Scripts\python.exe manage.py senior-aguardar-salvar --modelo 001
 
-# Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado (ex: 3898.pdf)
-.venv\Scripts\python.exe manage.py senior-separar-pdfs
+#SEPARAR OS PDF
+.venv\Scripts\python.exe manage.py senior-separar-pdfs --modelo 001
 
-# Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados
-# - Disparar para todos os colaboradores:
+#ENVIAR EMAIL
 .venv\Scripts\python.exe manage.py senior-enviar-emails
 
-# - Testar apenas UMA matrícula específica (ex: 4821):
-.venv\Scripts\python.exe manage.py senior-enviar-emails --matricula 4821
+#####################################################################
+702
+# FLUXO COMPLETO 
+.venv\Scripts\python.exe manage.py senior-fluxo
 
-# - Testar apontando para uma pasta específica de PDFs individuais:
-.venv\Scripts\python.exe manage.py senior-enviar-emails --individuais "data/individuais" --matricula 4821
+#TELA DE Datas
+.venv\Scripts\python.exe manage.py senior-valores-entrada
+
+#TELA SALVAR CONSOLIDADO
+.venv\Scripts\python.exe manage.py senior-aguardar-salvar
+
+#SEPARAR OS PDF
+.venv\Scripts\python.exe manage.py senior-separar-
+
+#ENVIAR EMAIL
+.venv\Scripts\python.exe manage.py senior-enviar-emails

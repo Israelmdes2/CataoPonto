@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     EMAIL_REMETENTE: str = "digitaly.tech@unimedvaledoaco.coop.br"
     EMAIL_TESTE_MODO: bool = False
     EMAIL_TESTE_DESTINO: Optional[str] = None
+    EMAIL_INTERVALO_SEGUNDOS: float = 10.0
 
     @field_validator("SENIOR_LOGIN", mode="after")
     @classmethod

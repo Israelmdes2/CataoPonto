@@ -1428,6 +1428,26 @@ def senior_selecionar_702(
         raise typer.Exit(1)
 
 
+@app.command("senior-selecionar-001")
+def senior_selecionar_001(
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
+):
+    """Passo 5: Localiza na Seleção de Modelos a opção 001 ('Cartão Ponto Simples') e clica para executar."""
+    from services.senior_service import SeniorService
+
+    ambiente = _val(ambiente, "homologacao")
+    timeout = _val(timeout, 15)
+
+    _sec(f"Passo 5: Seleção de Relatório 001 ({ambiente})")
+    service = SeniorService(ambiente=ambiente)
+    if service.selecionar_relatorio_001(timeout_janela=timeout):
+        _ok("Opção 001 ('Cartão Ponto Simples') selecionada com sucesso!")
+    else:
+        _err("Falha ao selecionar o relatório 001.")
+        raise typer.Exit(1)
+
+
 @app.command("senior-valores-entrada")
 def senior_valores_entrada(
     data_inicial: str = typer.Option("", "--data-inicial", "-i", help="Data inicial dd/mm/aaaa (calculada pelo PDD se omitida)"),
@@ -1446,7 +1466,7 @@ def senior_valores_entrada(
     _sec(f"Passo 6: Preenchimento de Valores de Entrada ({ambiente})")
     service = SeniorService(ambiente=ambiente)
     if not data_inicial or not data_final:
-        data_inicial, data_final = service.calcular_periodo_pdd(dia_simulado=4)
+        data_inicial, data_final = service.calcular_periodo_pdd()
     _info(f"Valores para preenchimento:")
     _info(f"    • Data Inicial: {data_inicial}")
     _info(f"    • Data Final:   {data_final}")
@@ -1462,6 +1482,7 @@ def senior_aguardar_salvar(
     destino: str = typer.Option("", "--destino", "-d", help="Caminho do arquivo PDF destino (padrão: V:\\grp-aud-doc\\DIGITALY_CARTAO_PONTO)"),
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
+    modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
     """Passo 7: Aguarda a janela de visualização do relatório, clica no disquete e salva na rede."""
     from services.senior_service import SeniorService
@@ -1469,12 +1490,14 @@ def senior_aguardar_salvar(
     destino = _val(destino, "")
     ambiente = _val(ambiente, "homologacao")
     timeout = _val(timeout, 1200)
+    modelo_str = str(_val(modelo, "702")).strip().zfill(3)
 
-    _sec(f"Passo 7: Aguardo e Salvamento do Relatório ({ambiente})")
+    _sec(f"Passo 7: Aguardo e Salvamento do Relatório Modelo {modelo_str} ({ambiente})")
     service = SeniorService(ambiente=ambiente)
     caminho_final = service.aguardar_relatorio_e_salvar(
         caminho_destino_pdf=Path(destino) if destino else None,
         timeout_segundos=timeout,
+        modelo=modelo_str,
     )
     if caminho_final:
         _ok(f"Passo 7 executado com sucesso! Arquivo consolidado salvo em: {caminho_final}")
@@ -1491,9 +1514,10 @@ def senior_fluxo(
     ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
-    selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Modelo 702 + Executar)"),
+    selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Seleção do Modelo)"),
+    modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
-    """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo 702."""
+    """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo (702 ou 001)."""
     usuario = _val(usuario, "")
     senha = _val(senha, "")
     abrir = _val(abrir, True)
@@ -1501,8 +1525,9 @@ def senior_fluxo(
     timeout = _val(timeout, 60)
     confidence = _val(confidence, 0.70)
     selecionar_702 = _val(selecionar_702, True)
+    modelo_str = str(_val(modelo, "702")).strip().zfill(3)
 
-    _sec(f"Fluxo Geral Senior: Login + Navegação + Modelo 702 ({ambiente})")
+    _sec(f"Fluxo Geral Senior: Login + Navegação + Modelo {modelo_str} ({ambiente})")
     
     # 1. Executa o Login
     _info("Etapa 1: Executando Login no Senior...")
@@ -1528,17 +1553,23 @@ def senior_fluxo(
         confidence=confidence,
     )
 
-    # 4. Executa a Seleção do Modelo 702 (Passo 5)
+    # 4. Executa a Seleção do Modelo (Passo 5: 702 ou 001)
+    from services.senior_service import SeniorService
+    srv = SeniorService(ambiente=ambiente)
     if selecionar_702:
-        _info("Etapa 3: Selecionando modelo 702 ('UnimedVA - Cartão Ponto Portal') e Executar...")
-        from services.senior_service import SeniorService
-        srv = SeniorService(ambiente=ambiente)
-        if srv.selecionar_relatorio_702(timeout_janela=15):
-            _ok("Etapa 3 concluída com sucesso (Modelo 702 selecionado e Executar clicado)!")
+        if modelo_str == "001":
+            _info("Etapa 3: Selecionando modelo 001 ('Cartão Ponto Simples') e Executar...")
+            ok_modelo = srv.selecionar_relatorio_001(timeout_janela=15)
+        else:
+            _info("Etapa 3: Selecionando modelo 702 ('UnimedVA - Cartão Ponto Portal') e Executar...")
+            ok_modelo = srv.selecionar_relatorio_702(timeout_janela=15)
+
+        if ok_modelo:
+            _ok(f"Etapa 3 concluída com sucesso (Modelo {modelo_str} selecionado e Executar clicado)!")
             
             # 5. Executa o Preenchimento de Valores de Entrada (Passo 6 - Simulação Dia 04)
-            data_ini_calc, data_fim_calc = srv.calcular_periodo_pdd(dia_simulado=4)
-            _info(f"Etapa 4: Preenchendo Valores de Entrada (Passo 6 - Simulação Dia 04)...")
+            data_ini_calc, data_fim_calc = srv.calcular_periodo_pdd()
+            _info(f"Etapa 4: Preenchendo Valores de Entrada (20 do mês anterior a 19 do mês atual)...")
             _info(f"Valores definidos para o período:")
             _info(f"    • Data Inicial: {data_ini_calc}")
             _info(f"    • Data Final:   {data_fim_calc}")
@@ -1547,10 +1578,15 @@ def senior_fluxo(
                 
                 # 6. Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO (Passo 7)
                 _info("Etapa 5: Aguardando relatório ser gerado e salvando na rede (Passo 7)...")
-                arq_salvo = srv.aguardar_relatorio_e_salvar()
+                arq_salvo = srv.aguardar_relatorio_e_salvar(modelo=modelo_str)
                 if arq_salvo:
                     _ok(f"Etapa 5 concluída com sucesso! Relatório consolidado salvo em: {arq_salvo}")
-                    
+
+                    # Fecha o Senior Desktop via PID imediatamente após salvar o PDF consolidado
+                    _info("Encerrando o Senior Desktop via PID (PDF consolidado já salvo)...")
+                    if srv.encerrar_senior():
+                        _ok("Senior Desktop encerrado com sucesso via PID. Prosseguindo com a separação de PDFs e e-mails...")
+
                     # 7. Separação dos Cartões Individuais por Código de Empregado (Passo 8)
                     from core.config import settings
                     from services.pdf_splitter_service import PdfSplitterService
@@ -1635,16 +1671,64 @@ def senior_fluxo(
             else:
                 _warn("Aviso na Etapa 4: Não foi possível preencher os Valores de Entrada.")
         else:
-            _warn("Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo 702.")
+            _warn(f"Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo {modelo_str}.")
+
+    # Garantia final: encerra o Senior via PID caso ainda exista algum processo residual
+    if srv.obter_pids_senior():
+        _info("Encerrando processos residuais do Senior Desktop via PID...")
+        if srv.encerrar_senior():
+            _ok("Processos residuais do Senior encerrados com sucesso via PID.")
 
     _ok("Fluxo geral executado com sucesso!")
 
+
+
+
+
+@app.command("senior-fluxo-001")
+def senior_fluxo_001(
+    usuario: str = typer.Option("", "--user", "-u", help="Usuário do Senior (busca do .env se omitido)"),
+    senha: str = typer.Option("", "--password", "-p", help="Senha do Senior (busca do .env se omitido)"),
+    abrir: bool = typer.Option(True, "--abrir/--no-abrir", help="Abrir o Senior antes da autenticação"),
+    ambiente: str = typer.Option("homologacao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
+    timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
+    confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
+):
+    """Executa o fluxo completo ponta a ponta utilizando o Modelo 001 ('Cartão Ponto Simples')."""
+    senior_fluxo(
+        usuario=usuario,
+        senha=senha,
+        abrir=abrir,
+        ambiente=ambiente,
+        timeout=timeout,
+        confidence=confidence,
+        selecionar_702=True,
+        modelo="001",
+    )
+
+@app.command("senior-fechar")
+def senior_fechar():
+    """Encerra com seguranca todos os processos ativos do Senior Desktop via PID."""
+    from services.senior_service import SeniorService
+    srv = SeniorService()
+    _sec("Encerramento do Senior Desktop (via PID)")
+    pids = srv.obter_pids_senior()
+    if not pids:
+        _warn("Nenhum processo ativo do Senior Desktop foi encontrado na maquina.")
+        return
+    _info(f"Processos do Senior localizados com PID(s): {pids}")
+    fechou = srv.encerrar_senior()
+    if fechou:
+        _ok(f"Processo(s) {pids} do Senior finalizado(s) com sucesso.")
+    else:
+        _err("Nao foi possivel finalizar os processos do Senior.")
 
 @app.command("senior-separar-pdfs")
 def senior_separar_pdfs(
     consolidado: str = typer.Option("", "--consolidado", "-c", help="Caminho do arquivo consolidado PDF"),
     destino: str = typer.Option("", "--destino", "-d", help="Pasta de destino dos PDFs individuais"),
     timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout para aguardar o arquivo ser carregado e virar PDF"),
+    modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
     """Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado."""
     from services.pdf_splitter_service import PdfSplitterService
@@ -1667,7 +1751,7 @@ def senior_separar_pdfs(
             service = SeniorService()
             caminho_pdf = service.aguardar_arquivo_pdf_estabilizado(
                 pasta=pasta_dia,
-                nome_esperado=f"HRCP702_{data_hoje}.pdf",
+                nome_esperado=f"HRCP{str(_val(modelo, '702')).strip().zfill(3)}_{data_hoje}.pdf",
                 timeout_segundos=timeout,
             )
         else:
@@ -1675,7 +1759,7 @@ def senior_separar_pdfs(
 
         if not caminho_pdf or not caminho_pdf.exists():
             # Fallback: procura na pasta raiz
-            arquivos = sorted(pasta_base.glob("**/HRCP702*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
+            arquivos = sorted(pasta_base.glob("**/HRCP*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
             if not arquivos:
                 _err(f"Nenhum arquivo consolidado PDF encontrado em: {pasta_dia} ou {pasta_base}")
                 raise typer.Exit(1)
