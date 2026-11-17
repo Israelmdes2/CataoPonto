@@ -1,30 +1,47 @@
+import ctypes
 import logging
-import os
 import subprocess
 import time
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
+
+import psutil
+import pyperclip
+from dateutil.relativedelta import relativedelta
+from pypdf import PdfReader
 
 from core.config import settings
-from infrastructure.automation import vision, gui
-from schemas.execucao import PeriodoCartao, ModoExecucao
+from infrastructure.automation import gui
+from schemas.execucao import ModoExecucao, PeriodoCartao
 
 logger = logging.getLogger(__name__)
 
+TERMOS_JANELA_SENIOR = (
+    "controle de ponto e refeitório",
+    "gestão de pessoas",
+    "vetorh",
+    "ronda",
+    "senior",
+    "seleção de modelos",
+    "modelos para execução",
+)
+EXECUTAVEIS_SENIOR = {"ronda.exe", "iniciar.exe", "rubi.exe", "cs.exe", "senior.exe"}
+PASTA_REDE_PADRAO = r"V:\grp-aud-doc\DIGITALY_CARTAO_PONTO"
+
 
 def _subtrair_meses(ano: int, mes: int, meses_a_subtrair: int) -> Tuple[int, int]:
-    """Subtrai meses de forma puramente nativa sem dependência externa."""
     total_meses = (ano * 12 + mes - 1) - meses_a_subtrair
-    novo_ano = total_meses // 12
-    novo_mes = (total_meses % 12) + 1
-    return novo_ano, novo_mes
+    return total_meses // 12, (total_meses % 12) + 1
 
 
 class SeniorService:
+    """Serviço de automação visual do sistema Senior Desktop (Vetorh/Ronda)."""
+
     def __init__(self, ambiente: str = "producao"):
         self.ambiente = "homologacao" if "homolog" in ambiente.lower() else "producao"
         self.templates_dir = Path(settings.SENIOR_TEMPLATES_DIR)
+        self.prints_dir = Path("assets/prints") / self.ambiente
         self.confidence = settings.SENIOR_CONFIDENCE
         self.templates_dir.mkdir(parents=True, exist_ok=True)
         self.pid: Optional[int] = None
@@ -34,316 +51,257 @@ class SeniorService:
         data_referencia: Optional[date] = None,
         modo: ModoExecucao | str = ModoExecucao.AUTO,
     ) -> PeriodoCartao:
-        """
-        Calcula as datas inicial e final rigorosamente de acordo com o PDD:
-        - Dia 20: Inicial = dia 20 mês anterior | Final = dia 19 mês atual
-        - Dia 30: Inicial = dia 20 mês anterior | Final = dia 19 mês atual
-        - Dia 04: Inicial = dia 20 do penúltimo mês | Final = dia 19 mês anterior
-        """
-        ref = data_referencia or date.today()
+        """Calcula o período de apuração conforme o modo do PDD (04, 20, 30 ou auto)."""
+        referencia = data_referencia or date.today()
         modo_str = modo.value if isinstance(modo, ModoExecucao) else str(modo)
 
         if modo_str == "auto":
-            dia = ref.day
-            if dia <= 10:
+            if referencia.day <= 10:
                 modo_str = "04"
-            elif dia <= 25:
+            elif referencia.day <= 25:
                 modo_str = "20"
             else:
                 modo_str = "30"
 
         if modo_str in ("20", "30"):
-            ano_ini, mes_ini = _subtrair_meses(ref.year, ref.month, 1)
-            dt_ini = date(ano_ini, mes_ini, 20)
-            dt_fim = date(ref.year, ref.month, 19)
+            ano_ini, mes_ini = _subtrair_meses(referencia.year, referencia.month, 1)
+            data_ini = date(ano_ini, mes_ini, 20)
+            data_fim = date(referencia.year, referencia.month, 19)
         elif modo_str == "04":
-            ano_ini, mes_ini = _subtrair_meses(ref.year, ref.month, 2)
-            dt_ini = date(ano_ini, mes_ini, 20)
-            ano_fim, mes_fim = _subtrair_meses(ref.year, ref.month, 1)
-            dt_fim = date(ano_fim, mes_fim, 19)
+            ano_ini, mes_ini = _subtrair_meses(referencia.year, referencia.month, 2)
+            data_ini = date(ano_ini, mes_ini, 20)
+            ano_fim, mes_fim = _subtrair_meses(referencia.year, referencia.month, 1)
+            data_fim = date(ano_fim, mes_fim, 19)
         else:
             raise ValueError(f"Modo de execução inválido: {modo_str}. Use '20', '30', '04' ou 'auto'.")
 
         return PeriodoCartao(
-            data_inicial=dt_ini.strftime("%d/%m/%Y"),
-            data_final=dt_fim.strftime("%d/%m/%Y"),
+            data_inicial=data_ini.strftime("%d/%m/%Y"),
+            data_final=data_fim.strftime("%d/%m/%Y"),
             modo_aplicado=modo_str,
         )
 
     def _obter_template(self, nome_arquivo: str) -> Optional[Path]:
-        """
-        Verifica se o template visual PNG existe:
-        1. Prioridade: pasta específica do ambiente (assets/templates/{ambiente}/)
-        2. Fallback: pasta raiz de templates (assets/templates/)
-        """
-        caminho_amb = self.templates_dir / self.ambiente / nome_arquivo
-        if caminho_amb.exists():
-            return caminho_amb
+        """Busca o template primeiro na pasta do ambiente e depois na raiz de templates."""
+        caminho_ambiente = self.templates_dir / self.ambiente / nome_arquivo
+        if caminho_ambiente.exists():
+            return caminho_ambiente
         caminho_raiz = self.templates_dir / nome_arquivo
         if caminho_raiz.exists():
             return caminho_raiz
         return None
 
+    @staticmethod
+    def _localizar_com_confiancas(
+        caminho_template: Optional[Path],
+        confiancas: Iterable[float],
+    ) -> Optional[Tuple[int, int]]:
+        """Tenta localizar um template visual percorrendo níveis decrescentes de confiança."""
+        if not caminho_template:
+            return None
+        for nivel_confianca in confiancas:
+            posicao = gui.locate_center_on_screen(str(caminho_template), confidence=nivel_confianca)
+            if posicao:
+                return posicao
+        return None
+
     def focar_janela_senior(self) -> bool:
-        """Garante que a janela do Senior esteja em primeiro plano absoluto."""
+        """Coloca a janela ativa do Senior em primeiro plano."""
         return gui.focar_senior_geral()
 
     def _esta_visivel(self, nome_template: str, confidence: float = 0.70) -> bool:
-        """Verifica se um elemento visual está presente na tela sem bloquear."""
-        tpl = self._obter_template(nome_template)
-        if not tpl:
+        """Verifica se um elemento visual está visível na tela sem bloquear."""
+        template = self._obter_template(nome_template)
+        if not template:
             return False
-        return gui.is_visible(str(tpl), confidence=confidence)
+        return gui.is_visible(str(template), confidence=confidence)
 
     def tratar_obstaculos_conhecidos(self) -> bool:
-        """
-        Motor de Auto-Recuperação (Self-Healing):
-        Detecta e resolve obstáculos intermediários antes do próximo passo:
-        1. Foca a janela do Senior;
-        2. Clica no ícone de módulo (colaboradores) caso apareça;
-        3. Retorna True se tratou alguma condição.
-        """
+        """Foca a janela do Senior e expande o ícone de módulo se estiver bloqueando a tela."""
         self.focar_janela_senior()
-
-        # 1. Ícone de seleção de módulo (Homologação / hub)
-        tpl_mod = self._obter_template("icone_modulo.png")
-        if tpl_mod and gui.is_visible(str(tpl_mod), confidence=0.70):
-            logger.info("Auto-recuperação: Ícone de módulo detectado na tela. Clicando para expandir...")
-            pos = gui.locate_center_on_screen(str(tpl_mod), confidence=0.70)
-            if pos:
-                gui.click(pos[0], pos[1])
+        template_modulo = self._obter_template("icone_modulo.png")
+        if template_modulo and gui.is_visible(str(template_modulo), confidence=0.70):
+            posicao = gui.locate_center_on_screen(str(template_modulo), confidence=0.70)
+            if posicao:
+                gui.click(posicao[0], posicao[1])
                 time.sleep(2)
                 return True
-
         return False
 
     def _clicar_icone_modulo_se_necessario(self, timeout: int = 6) -> bool:
-        """Mantido para compatibilidade: trata a transição de módulo."""
+        """Trata a tela intermediária de seleção de módulo quando exibida."""
         return self.tratar_obstaculos_conhecidos()
 
     def garantir_menu_principal_pronto(self, timeout: float = 30.0) -> bool:
-        """
-        Garante que o módulo está ativo e a barra de menus ('Cálculos') visível:
-        1. Se Cálculos já está visível: retorna True imediatamente.
-        2. Se o ícone das 3 pessoas (colaboradores) estiver na tela: clica nele para abrir o módulo.
-        3. Aguarda a renderização dos menus principais.
-        """
-        logger.info(f"Garantindo que o módulo e menus do Senior estão prontos (timeout: {timeout}s)...")
-        deadline = time.time() + timeout
-        tpl_calc = self._obter_template("menu_calculos.png")
-        tpl_mod = self._obter_template("icone_modulo.png")
+        """Aguarda até que o menu principal ('Cálculos') esteja visível e desobstruído."""
+        prazo_limite = time.time() + timeout
+        template_calculos = self._obter_template("menu_calculos.png")
+        template_modulo = self._obter_template("icone_modulo.png")
 
-        while time.time() < deadline:
+        while time.time() < prazo_limite:
             self.focar_janela_senior()
-
-            # 1. Se Cálculos já está visível, sucesso imediato
-            if tpl_calc and gui.is_visible(str(tpl_calc), confidence=0.70):
-                logger.info("Menu principal ('Cálculos') confirmado e pronto!")
+            if template_calculos and gui.is_visible(str(template_calculos), confidence=0.70):
                 return True
 
-            # 2. Se o ícone das 3 pessoas estiver na tela, clica nele
-            if tpl_mod and gui.is_visible(str(tpl_mod), confidence=0.68):
-                pos = gui.locate_center_on_screen(str(tpl_mod), confidence=0.68)
-                if pos:
-                    logger.info(f"Ícone de módulo (3 colaboradores) detectado em {pos}. Clicando para abrir módulo...")
-                    gui.click(pos[0], pos[1])
+            if template_modulo and gui.is_visible(str(template_modulo), confidence=0.68):
+                posicao = gui.locate_center_on_screen(str(template_modulo), confidence=0.68)
+                if posicao:
+                    gui.click(posicao[0], posicao[1])
                     time.sleep(3)
                     continue
 
             self.tratar_obstaculos_conhecidos()
             time.sleep(1.0)
 
-        logger.warning(f"Timeout de {timeout}s: Menu principal não foi detectado.")
+        logger.warning(f"Menu principal não detectado após {timeout}s.")
         return False
 
-    def _clicar_se_encontrar(self, nome_template: str, timeout: int = 10, descricao: str = "", tentar_recuperar: bool = True) -> bool:
-        """Localiza o template na tela usando Visão Computacional com auto-recuperação e clica."""
-        template_path = self._obter_template(nome_template)
-        desc = descricao or nome_template
+    def _clicar_se_encontrar(
+        self,
+        nome_template: str,
+        timeout: int = 10,
+        descricao: str = "",
+        tentar_recuperar: bool = True,
+    ) -> bool:
+        """Localiza o template na tela (com auto-recuperação opcional) e executa o clique."""
+        caminho_template = self._obter_template(nome_template)
+        nome_legivel = descricao or nome_template
 
-        if not template_path:
-            logger.warning(
-                f"[TEMPLATE VISUAL AUSENTE] O template '{nome_template}' não foi encontrado em '{self.templates_dir}'. "
-                f"Capture o print do elemento '{desc}' e salve como '{nome_template}'."
-            )
+        if not caminho_template:
+            logger.warning(f"Template visual ausente: '{nome_template}' ({nome_legivel}).")
             return False
 
-        logger.info(f"Procurando elemento visual na tela: {desc} ({nome_template})...")
         try:
-            pos = gui.wait_for(str(template_path), timeout=timeout, confidence=self.confidence)
-            if pos:
-                x, y = pos
-                gui.click(x, y)
-                logger.info(f"Elemento '{desc}' clicado na posição ({x}, {y}).")
+            posicao = gui.wait_for(str(caminho_template), timeout=timeout, confidence=self.confidence)
+            if posicao:
+                gui.click(posicao[0], posicao[1])
                 return True
 
-            # Tentativa de Self-Healing se habilitado
-            if tentar_recuperar:
-                logger.info(f"Elemento '{desc}' não visto de imediato. Tentando auto-recuperação...")
-                if self.tratar_obstaculos_conhecidos():
-                    pos_retry = gui.wait_for(str(template_path), timeout=5, confidence=self.confidence)
-                    if pos_retry:
-                        gui.click(pos_retry[0], pos_retry[1])
-                        logger.info(f"Elemento '{desc}' clicado após auto-recuperação!")
-                        return True
+            if tentar_recuperar and self.tratar_obstaculos_conhecidos():
+                posicao_retentativa = gui.wait_for(str(caminho_template), timeout=5, confidence=self.confidence)
+                if posicao_retentativa:
+                    gui.click(posicao_retentativa[0], posicao_retentativa[1])
+                    return True
 
-            logger.warning(f"Elemento visual '{desc}' não encontrado na tela após {timeout}s.")
+            logger.warning(f"Elemento '{nome_legivel}' não encontrado após {timeout}s.")
             return False
-        except Exception as e:
-            logger.error(f"Erro ao tentar localizar visualmente '{desc}': {e}")
+        except Exception as erro:
+            logger.error(f"Erro ao localizar '{nome_legivel}': {erro}")
             return False
 
     def abrir_sistema_senior(self, ambiente: str = "producao") -> bool:
-        """Dispara o Senior diretamente sem abrir pastas do Explorer."""
-        logger.info(f"Iniciando Senior ({ambiente}) diretamente pelo executável...")
-        is_hml = "homolog" in ambiente.lower()
-        srv_dir = "Senior_HML" if is_hml else "Senior"
-        srv_host = "SRVVETORH-HML" if is_hml else "SRVVETORH"
-        senior_dir = r"C:\Senior-hml" if is_hml else r"C:\Senior"
-        exe_unc = f"\\\\{srv_host}\\\\{srv_dir}\\Iniciar.exe"
-        args = f'-SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\\"'
+        """Dispara o executável do Senior diretamente pelo servidor ou instalação local."""
+        eh_homologacao = "homolog" in ambiente.lower()
+        pasta_servidor = "Senior_HML" if eh_homologacao else "Senior"
+        servidor_host = "SRVVETORH-HML" if eh_homologacao else "SRVVETORH"
+        diretorio_senior = r"C:\Senior-hml" if eh_homologacao else r"C:\Senior"
+        executavel_rede = f"\\\\{servidor_host}\\{pasta_servidor}\\Iniciar.exe"
+        argumentos = f'-SystemModule:VETORH.RONDA -seniordir:"{diretorio_senior}\\"'
 
         try:
-            proc = subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
-            if proc and proc.pid:
-                self.pid = proc.pid
+            processo = subprocess.Popen(f'"{executavel_rede}" {argumentos}', shell=True)
+            if processo and processo.pid:
+                self.pid = processo.pid
             time.sleep(6)
             self.focar_janela_senior()
-            pids = self.obter_pids_senior()
-            if pids:
-                logger.info(f"Senior iniciado e identificado com PID(s): {pids}")
             return True
-        except Exception as e:
-            logger.error(f"Erro ao disparar Senior via UNC: {e}")
+        except Exception as erro:
+            logger.error(f"Erro ao disparar Senior via rede: {erro}")
 
-        exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
-        if exe_local.exists():
+        executavel_local = Path(diretorio_senior) / "Vetorh" / "RONDA.EXE"
+        if executavel_local.exists():
             try:
-                proc = subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
-                if proc and proc.pid:
-                    self.pid = proc.pid
+                processo = subprocess.Popen([str(executavel_local)], cwd=str(executavel_local.parent))
+                if processo and processo.pid:
+                    self.pid = processo.pid
                 time.sleep(6)
                 self.focar_janela_senior()
-                pids = self.obter_pids_senior()
-                if pids:
-                    logger.info(f"Senior iniciado e identificado com PID(s): {pids}")
                 return True
-            except Exception as e:
-                logger.error(f"Erro ao disparar Senior local: {e}")
+            except Exception as erro:
+                logger.error(f"Erro ao disparar Senior local: {erro}")
 
         return False
 
-
     def obter_pids_senior(self) -> set[int]:
-        """Localiza todos os PIDs de processos e janelas ativas pertencentes ao Senior/Ronda."""
-        import psutil
-        import ctypes
+        """Localiza todos os PIDs de janelas e processos ativos pertencentes ao Senior/Ronda."""
         pids: set[int] = set()
-
         if self.pid and psutil.pid_exists(self.pid):
             pids.add(self.pid)
 
-        # 1. Busca por Janelas Abertas do Senior (via HWND -> PID)
         try:
             user32 = ctypes.windll.user32
-            termos_janela = [
-                "controle de ponto e refeitório",
-                "gestão de pessoas",
-                "vetorh",
-                "ronda",
-                "senior",
-                "seleção de modelos",
-                "modelos para execução",
-            ]
 
-            def enum_proc(hwnd, extra):
-                if user32.IsWindowVisible(hwnd):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buff = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buff, length + 1)
-                        tit = buff.value.lower()
-                        if any(t in tit for t in termos_janela):
-                            lpdw = ctypes.c_ulong()
-                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(lpdw))
-                            if lpdw.value:
-                                pids.add(lpdw.value)
+            def _enumerar_janela(hwnd, _extra):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                tamanho = user32.GetWindowTextLengthW(hwnd)
+                if tamanho <= 0:
+                    return True
+                buffer_titulo = ctypes.create_unicode_buffer(tamanho + 1)
+                user32.GetWindowTextW(hwnd, buffer_titulo, tamanho + 1)
+                titulo = buffer_titulo.value.lower()
+                if any(termo in titulo for termo in TERMOS_JANELA_SENIOR):
+                    pid_janela = ctypes.c_ulong()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_janela))
+                    if pid_janela.value:
+                        pids.add(pid_janela.value)
                 return True
 
-            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-            user32.EnumWindows(WNDENUMPROC(enum_proc), 0)
-        except Exception as e:
-            logger.debug(f"Aviso ao buscar PID por HWND: {e}")
+            tipo_callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            user32.EnumWindows(tipo_callback(_enumerar_janela), 0)
+        except Exception as erro:
+            logger.debug(f"Aviso ao buscar PID por HWND: {erro}")
 
-        # 2. Busca por Processos em Execução (psutil)
-        nomes_alvo = {"ronda.exe", "iniciar.exe", "rubi.exe", "cs.exe", "senior.exe"}
         try:
-            for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+            for processo in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
                 try:
-                    name = (proc.info['name'] or '').lower()
-                    exe = (proc.info['exe'] or '').lower()
-                    cmdline = " ".join(proc.info.get('cmdline') or []).lower()
+                    nome = (processo.info["name"] or "").lower()
+                    caminho_exe = (processo.info["exe"] or "").lower()
+                    linha_comando = " ".join(processo.info.get("cmdline") or []).lower()
 
-                    if name in nomes_alvo:
-                        pids.add(proc.info['pid'])
-                    elif "senior" in exe and ("vetorh" in exe or "ronda" in exe):
-                        pids.add(proc.info['pid'])
-                    elif "senior-hml" in cmdline or "vetorh.ronda" in cmdline:
-                        pids.add(proc.info['pid'])
+                    if nome in EXECUTAVEIS_SENIOR:
+                        pids.add(processo.info["pid"])
+                    elif "senior" in caminho_exe and ("vetorh" in caminho_exe or "ronda" in caminho_exe):
+                        pids.add(processo.info["pid"])
+                    elif "senior-hml" in linha_comando or "vetorh.ronda" in linha_comando:
+                        pids.add(processo.info["pid"])
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
-        except Exception as e:
-            logger.debug(f"Aviso ao iterar processos psutil: {e}")
+        except Exception as erro:
+            logger.debug(f"Aviso ao iterar processos do Senior: {erro}")
 
         return pids
 
     def encerrar_senior(self, pid: Optional[int] = None) -> bool:
-        """
-        Encerra com segurança o Senior Desktop via PID (processo pai e filhos).
-        """
-        import psutil
-        pids_alvo = set()
-        if pid:
-            pids_alvo.add(pid)
-        else:
-            pids_alvo = self.obter_pids_senior()
-
+        """Encerra com segurança os processos pai e filhos do Senior Desktop via PID."""
+        pids_alvo = {pid} if pid else self.obter_pids_senior()
         if not pids_alvo:
-            logger.info("Nenhum processo ativo do Senior identificado para encerramento.")
             return False
 
-        logger.info(f"Encerrando Senior via PID(s): {pids_alvo}...")
         encerrados = 0
-
-        for p_id in pids_alvo:
+        for pid_atual in pids_alvo:
             try:
-                if not psutil.pid_exists(p_id):
+                if not psutil.pid_exists(pid_atual):
                     continue
-                proc = psutil.Process(p_id)
-                logger.info(f"Finalizando processo PID {p_id} ({proc.name()})...")
-
-                # Encerra filhos primeiro
-                filhos = proc.children(recursive=True)
-                for f in filhos:
+                processo = psutil.Process(pid_atual)
+                filhos = processo.children(recursive=True)
+                for processo_filho in filhos:
                     try:
-                        f.terminate()
+                        processo_filho.terminate()
                     except Exception:
                         pass
-                proc.terminate()
+                processo.terminate()
 
-                # Aguarda até 3 segundos para fechamento gracioso
-                _, ainda_vivos = psutil.wait_procs([proc] + filhos, timeout=3.0)
-                for vivo in ainda_vivos:
+                _, processos_vivos = psutil.wait_procs([processo] + filhos, timeout=3.0)
+                for vivo in processos_vivos:
                     try:
                         vivo.kill()
                     except Exception:
                         pass
-
                 encerrados += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # Fallback via taskkill nativo do Windows
                 try:
-                    subprocess.run(f"taskkill /PID {p_id} /T /F", shell=True, capture_output=True)
+                    subprocess.run(f"taskkill /PID {pid_atual} /T /F", shell=True, capture_output=True)
                     encerrados += 1
                 except Exception:
                     pass
@@ -352,57 +310,43 @@ class SeniorService:
         return encerrados > 0
 
     def autenticar_senior(self, usuario: Optional[str] = None, senha: Optional[str] = None) -> bool:
-        """
-        PASSO 3:
-        1. Inserir Login;
-        2. Inserir Senha;
-        3. Clicar no botão 'Autenticar'.
-        """
-        user = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
-        password = senha or settings.SENIOR_PASSWORD
-        logger.info(f"Realizando autenticação do usuário '{user}' no Senior...")
-
-        # Verifica se ainda está na tela de seleção do módulo (HML)
+        """Executa o login no Senior preservando maiúsculas/minúsculas via área de transferência."""
+        usuario_final = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
+        senha_final = senha or settings.SENIOR_PASSWORD
         self._clicar_icone_modulo_se_necessario(timeout=3)
 
-        # Estratégia 1: Ancoragem pelo botão azul 'Autenticar'
-        tpl_btn = self._obter_template("botao_autenticar.png")
-        if tpl_btn:
-            pos_btn = gui.wait_for(str(tpl_btn), timeout=12, confidence=self.confidence)
-            if pos_btn:
-                logger.info(f"Botão 'Autenticar' localizado em: {pos_btn}. Navegando para campos por ancoragem.")
-                # O campo de usuário fica ~93px acima do centro do botão Autenticar (calibrado em 1080p)
-                x_user = pos_btn[0]
-                y_user = pos_btn[1] - 93
-                gui.click(x_user, y_user)
+        template_autenticar = self._obter_template("botao_autenticar.png")
+        if template_autenticar:
+            posicao_botao = gui.wait_for(str(template_autenticar), timeout=12, confidence=self.confidence)
+            if posicao_botao:
+                # Campo de usuário fica 93px acima do centro do botão Autenticar em 1080p;
+                # pyperclip evita perda de Shift/CapsLock durante digitação em sessões RDP.
+                gui.click(posicao_botao[0], posicao_botao[1] - 93)
                 time.sleep(0.5)
                 gui.hotkey("ctrl", "a")
                 gui.press("backspace")
-                import pyperclip
-                pyperclip.copy(user.lower())
+                pyperclip.copy(usuario_final)
                 gui.hotkey("ctrl", "v")
                 gui.press("tab")
                 time.sleep(0.5)
                 gui.hotkey("ctrl", "a")
                 gui.press("backspace")
-                pyperclip.copy(password)
+                pyperclip.copy(senha_final)
                 gui.hotkey("ctrl", "v")
                 time.sleep(0.2)
                 pyperclip.copy("")
                 time.sleep(0.5)
-                gui.click(pos_btn[0], pos_btn[1])
+                gui.click(posicao_botao[0], posicao_botao[1])
                 time.sleep(5)
                 return True
 
-        # Estratégia 2: Busca direta pelo campo de login
-        clicou_login = self._clicar_se_encontrar("campo_login.png", timeout=5, descricao="Campo de Login")
-        if clicou_login:
+        if self._clicar_se_encontrar("campo_login.png", timeout=5, descricao="Campo de Login"):
             gui.hotkey("ctrl", "a")
             gui.press("backspace")
-            gui.type_text(user)
+            gui.type_text(usuario_final)
             gui.press("tab")
             time.sleep(0.5)
-            gui.type_text(password)
+            gui.type_text(senha_final)
             time.sleep(0.5)
             self._clicar_se_encontrar("botao_autenticar.png", timeout=5, descricao="Botão Autenticar")
             time.sleep(5)
@@ -411,29 +355,17 @@ class SeniorService:
         return False
 
     def navegar_para_cartao_ponto(self) -> bool:
-        """
-        PASSO 4:
-        1. Clicar na aba 'Cálculos';
-        2. Selecionar a opção 'Apuração';
-        3. Selecionar a opção 'Listar';
-        4. Clicar na opção 'Cartão Ponto'.
-        """
-        logger.info("Navegando pelos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto...")
-        
-        # Garante que a tela de menus está pronta e desobstruída antes de navegar
+        """Navega pelo menu do Senior até Cálculos -> Apuração -> Listar -> Cartão Ponto."""
         self.garantir_menu_principal_pronto(timeout=25)
-
-        steps = [
+        etapas_menu = (
             ("menu_calculos.png", "Aba Cálculos"),
             ("menu_apuracao.png", "Opção Apuração"),
             ("menu_listar.png", "Opção Listar"),
             ("menu_cartao_ponto.png", "Opção Cartão Ponto"),
-        ]
-
-        for template, desc in steps:
-            self._clicar_se_encontrar(template, timeout=4, descricao=desc)
+        )
+        for template, descricao in etapas_menu:
+            self._clicar_se_encontrar(template, timeout=4, descricao=descricao)
             time.sleep(0.3)
-
         return True
 
     def _selecionar_modelo_relatorio(
@@ -445,114 +377,81 @@ class SeniorService:
         timeout_janela: int = 15,
         direcao_scroll: str = "down",
     ) -> bool:
-        """
-        PASSO 5 (Genérico):
-        1. Aguarda a janela 'Seleção de Modelos para Execução';
-        2. Localiza a linha do modelo informado (rolando para baixo ou para cima);
-        3. Clica duas vezes com precisão no NOME da opção para abrir Valores de Entrada.
-        """
-        logger.info(f"Iniciando Passo 5: Seleção de Modelos para Execução (Código {codigo})...")
+        """Localiza e aplica duplo clique no modelo desejado na janela Seleção de Modelos."""
+        template_titulo = self._obter_template("titulo_selecao_modelos.png")
+        template_executar = self._obter_template("botao_executar.png")
+        template_opcao = self._obter_template(tpl_opcao_nome)
+        template_nome = self._obter_template(tpl_nome_modelo)
 
-        tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
-        tpl_exec = self._obter_template("botao_executar.png")
-        tpl_opcao = self._obter_template(tpl_opcao_nome)
-        tpl_nome = self._obter_template(tpl_nome_modelo)
+        posicao_executar = None
+        if template_executar:
+            posicao_executar = gui.wait_for(str(template_executar), timeout=timeout_janela, confidence=self.confidence)
 
-        pos_exec = None
-        if tpl_exec:
-            pos_exec = gui.wait_for(str(tpl_exec), timeout=timeout_janela, confidence=self.confidence)
+        if not posicao_executar and template_titulo:
+            posicao_titulo = gui.wait_for(str(template_titulo), timeout=4, confidence=self.confidence)
+            if posicao_titulo:
+                if template_executar:
+                    posicao_executar = gui.wait_for(str(template_executar), timeout=3, confidence=self.confidence)
+                if not posicao_executar:
+                    posicao_executar = (posicao_titulo[0] + 510, posicao_titulo[1] + 35)
 
-        if not pos_exec and tpl_titulo:
-            pos_tit = gui.wait_for(str(tpl_titulo), timeout=4, confidence=self.confidence)
-            if pos_tit:
-                if tpl_exec:
-                    pos_exec = gui.wait_for(str(tpl_exec), timeout=3, confidence=self.confidence)
-                if not pos_exec:
-                    pos_exec = (pos_tit[0] + 510, pos_tit[1] + 35)
-
-        if not pos_exec:
-            logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada após timeout.")
+        if not posicao_executar:
+            logger.warning("Janela 'Seleção de Modelos para Execução' não encontrada.")
             return False
 
-        logger.info(f"Janela de Modelos aberta! Botão Executar em: {pos_exec}")
-
-        # Coordenadas calibradas na grade e na barra de rolagem
-        x_grade = pos_exec[0] - 300
-        y_grade = pos_exec[1] + 60
-        x_trilho_barra = pos_exec[0] - 55
-        y_trilho_barra = pos_exec[1] + 110
-        y_seta_barra = pos_exec[1] + 165
+        x_grade = posicao_executar[0] - 300
+        y_grade = posicao_executar[1] + 60
+        x_trilho = posicao_executar[0] - 55
+        y_trilho = posicao_executar[1] + 110
+        y_seta_barra = posicao_executar[1] + 165
 
         def _buscar_estrito():
-            for tpl in [tpl_opcao, tpl_nome]:
-                if not tpl:
-                    continue
-                for conf in [0.88, 0.82]:
-                    p_found = gui.locate_center_on_screen(str(tpl), confidence=conf)
-                    if p_found:
-                        return p_found, tpl
+            for template in (template_opcao, template_nome):
+                posicao = self._localizar_com_confiancas(template, (0.88, 0.82))
+                if posicao:
+                    return posicao, template
             return None, None
 
-        logger.info(f"Verificando se opção {codigo} já está visível...")
-        pos_modelo, qual_tpl = _buscar_estrito()
-
-        if not pos_modelo:
+        posicao_modelo, template_usado = _buscar_estrito()
+        if not posicao_modelo:
             gui.click(x_grade, y_grade)
             time.sleep(0.3)
-            pos_modelo, qual_tpl = _buscar_estrito()
+            posicao_modelo, template_usado = _buscar_estrito()
 
-        if not pos_modelo:
-            for ciclo in range(25):
+        if not posicao_modelo:
+            for _ in range(25):
                 if direcao_scroll == "up":
-                    try:
-                        gui.press("home")
-                        gui.scroll(5)
-                    except Exception:
-                        pass
+                    gui.press("home")
+                    gui.scroll(5)
                 else:
-                    try:
-                        gui.scroll(-4)
-                    except Exception:
-                        pass
-                    try:
-                        gui.press("pagedown")
-                        gui.press("down")
-                    except Exception:
-                        pass
-                    try:
-                        gui.click(x_trilho_barra, y_trilho_barra)
-                        gui.click(x_trilho_barra, y_seta_barra)
-                    except Exception:
-                        pass
+                    gui.scroll(-4)
+                    gui.press("pagedown")
+                    gui.press("down")
+                    gui.click(x_trilho, y_trilho)
+                    gui.click(x_trilho, y_seta_barra)
 
                 time.sleep(0.12)
-                pos_modelo, qual_tpl = _buscar_estrito()
-                if pos_modelo:
-                    logger.info(f"Opção {codigo} localizada com sucesso no ciclo {ciclo + 1} em {pos_modelo}!")
+                posicao_modelo, template_usado = _buscar_estrito()
+                if posicao_modelo:
                     break
 
-        if not pos_modelo:
-            logger.warning(f"Opção {codigo} ('{descricao}') NÃO encontrada após rolagem completa.")
+        if not posicao_modelo:
+            logger.warning(f"Modelo {codigo} ('{descricao}') não encontrado na grade.")
             return False
 
-        if qual_tpl and tpl_opcao_nome in str(qual_tpl):
-            x_nome = pos_modelo[0] + 35
-            y_nome = pos_modelo[1]
-        else:
-            x_nome = pos_modelo[0]
-            y_nome = pos_modelo[1]
+        deslocamento_x = 35 if template_usado and tpl_opcao_nome in str(template_usado) else 0
+        x_nome = posicao_modelo[0] + deslocamento_x
+        y_nome = posicao_modelo[1]
 
-        logger.info(f"Clicando com precisão no NOME da opção {codigo} em ({x_nome}, {y_nome})...")
+        # Duplo clique diretamente no nome aciona a abertura imediata do modal Valores de Entrada
         gui.click(x_nome, y_nome)
         time.sleep(0.3)
         gui.click(x_nome, y_nome)
         time.sleep(0.8)
-
-        logger.info(f"Passo 5 (Código {codigo}) executado com sucesso!")
         return True
 
     def selecionar_relatorio_702(self, timeout_janela: int = 15) -> bool:
-        """PASSO 5: Seleciona o modelo 702 ('UnimedVA - Cartão Ponto Portal')."""
+        """Seleciona o modelo 702 ('UnimedVA - Cartão Ponto Portal')."""
         return self._selecionar_modelo_relatorio(
             codigo="702",
             descricao="UnimedVA - Cartão Ponto Portal",
@@ -563,7 +462,7 @@ class SeniorService:
         )
 
     def selecionar_relatorio_001(self, timeout_janela: int = 15) -> bool:
-        """PASSO 5: Seleciona o modelo 001 ('Cartão Ponto Simples')."""
+        """Seleciona o modelo 001 ('Cartão Ponto Simples')."""
         return self._selecionar_modelo_relatorio(
             codigo="001",
             descricao="Cartão Ponto Simples",
@@ -574,221 +473,150 @@ class SeniorService:
         )
 
     def calcular_periodo_pdd(self, dia_simulado: Optional[int] = None) -> tuple[str, str]:
-        """
-        Calcula as datas inicial e final para o modal 'Valores de Entrada' (Passo 6):
-        Regra: Sempre dia 20 do mês anterior e dia 19 do mês atual.
-        """
-        from datetime import datetime
-        from dateutil.relativedelta import relativedelta
-
+        """Calcula o período fixo de apuração: dia 20 do mês anterior até dia 19 do mês atual."""
         agora = datetime.now()
-        dt_ini = (agora - relativedelta(months=1)).replace(day=20)
-        dt_fim = agora.replace(day=19)
-
-        str_ini = dt_ini.strftime("%d/%m/%Y")
-        str_fim = dt_fim.strftime("%d/%m/%Y")
-        logger.info(f"Período de Valores de Entrada calculado (20 do mês anterior a 19 do mês atual): {str_ini} até {str_fim}")
-        return str_ini, str_fim
+        data_ini = (agora - relativedelta(months=1)).replace(day=20)
+        data_fim = agora.replace(day=19)
+        return data_ini.strftime("%d/%m/%Y"), data_fim.strftime("%d/%m/%Y")
 
     def fechar_janela_pesquisa_registro_se_aberta(self, timeout: int = 10) -> bool:
-        """Verifica por até timeout segundos se a janela indesejada 'Pesquisa de registro' abriu e a fecha com ESC."""
-        tpl_pesq = self._obter_template("titulo_pesquisa_registro.png")
-        if not tpl_pesq:
+        """Fecha a janela 'Pesquisa de registro' com ESC caso ela abra acidentalmente."""
+        template_pesquisa = self._obter_template("titulo_pesquisa_registro.png")
+        if not template_pesquisa:
             return False
 
         inicio = time.time()
         while time.time() - inicio < timeout:
-            for conf in [0.82, 0.75, 0.70]:
-                pos_pesq = gui.locate_center_on_screen(str(tpl_pesq), confidence=conf)
-                if pos_pesq:
-                    logger.warning(f"Janela indesejada 'Pesquisa de registro' detectada em {pos_pesq}! Fechando com ESC...")
-                    gui.click(pos_pesq[0], pos_pesq[1])
-                    time.sleep(0.3)
-                    gui.press("esc")
-                    time.sleep(0.8)
-                    return True
+            posicao = self._localizar_com_confiancas(template_pesquisa, (0.82, 0.75, 0.70))
+            if posicao:
+                gui.click(posicao[0], posicao[1])
+                time.sleep(0.3)
+                gui.press("esc")
+                time.sleep(0.8)
+                return True
             time.sleep(0.5)
         return False
 
-    def preencher_datas_e_gerar(self, data_inicial: Optional[str] = None, data_final: Optional[str] = None, timeout_janela: int = 30) -> bool:
-        """
-        PASSO 6:
-        1. Aguardar obrigatoriamente a identificação visual da tela 'Valores de Entrada';
-        2. Somente após a tela estar aberta e identificada, clicar no campo 'Data Inicial' e digitar;
-        3. Clicar no campo 'Data Final' e digitar;
-        4. Aguardar 5 segundos para conferência visual;
-        5. Clicar no botão 'Ok'.
-        """
+    def _aguardar_modal_valores_entrada(self, timeout_janela: int) -> Optional[Tuple[int, int]]:
+        """Aguarda a abertura do modal Valores de Entrada usando múltiplos marcadores visuais."""
+        marcadores = (
+            (self._obter_template("titulo_valores_entrada.png"), (0.85, 0.75, 0.65)),
+            (self._obter_template("aba_entrada.png"), (0.85, 0.72)),
+            (self._obter_template("botao_ok_entrada.png"), (0.85, 0.72)),
+            (self._obter_template("label_data_inicial_texto.png"), (0.85, 0.72)),
+            (self._obter_template("label_data_inicial.png"), (0.85, 0.70)),
+        )
+        inicio_espera = time.time()
+        while time.time() - inicio_espera < timeout_janela:
+            for template, confiancas in marcadores:
+                posicao = self._localizar_com_confiancas(template, confiancas)
+                if posicao:
+                    return posicao
+            time.sleep(1.0)
+        return None
+
+    def _localizar_campo_data_inicial(
+        self,
+        posicao_referencia: Tuple[int, int],
+    ) -> Tuple[int, int]:
+        """Localiza a coordenada de clique no início dos dígitos do campo Data Inicial."""
+        posicao = self._localizar_com_confiancas(
+            self._obter_template("label_data_inicial_texto.png"),
+            (0.88, 0.78, 0.68),
+        )
+        if posicao:
+            return posicao[0] + 45, posicao[1]
+
+        posicao = self._localizar_com_confiancas(
+            self._obter_template("campo_data_inicial_box.png"),
+            (0.85, 0.70),
+        )
+        if posicao:
+            return posicao[0] - 15, posicao[1]
+
+        posicao = self._localizar_com_confiancas(
+            self._obter_template("label_data_inicial.png"),
+            (0.65,),
+        )
+        if posicao:
+            return posicao[0] + 80, posicao[1]
+
+        posicao = self._localizar_com_confiancas(
+            self._obter_template("botao_ok_entrada.png"),
+            (0.65,),
+        )
+        if posicao:
+            return posicao[0] - 635, posicao[1] + 20
+
+        return posicao_referencia[0] - 15, posicao_referencia[1] + 50
+
+    def _localizar_campo_data_final(self, campo_inicial: Tuple[int, int]) -> Tuple[int, int]:
+        """Localiza a coordenada de clique no início dos dígitos do campo Data Final."""
+        posicao = self._localizar_com_confiancas(
+            self._obter_template("label_data_final_texto.png"),
+            (0.88, 0.78, 0.68),
+        )
+        if posicao:
+            return posicao[0] + 45, posicao[1]
+        return campo_inicial[0], campo_inicial[1] + 27
+
+    def preencher_datas_e_gerar(
+        self,
+        data_inicial: Optional[str] = None,
+        data_final: Optional[str] = None,
+        timeout_janela: int = 30,
+    ) -> bool:
+        """Preenche Data Inicial e Final no modal Valores de Entrada com digitação cadenciada e aciona Ok."""
         if not data_inicial or not data_final:
             data_inicial, data_final = self.calcular_periodo_pdd()
 
-        logger.info(f"Iniciando Passo 6: Preenchimento de Valores de Entrada ({data_inicial} até {data_final})...")
-        print(f"\n  [>] Preenchimento de Valores de Entrada no Senior:")
-        print(f"      * Data Inicial : {data_inicial}")
-        print(f"      * Data Final   : {data_final}")
+        print(f"\n  [>] Valores de Entrada: Data Inicial [{data_inicial}] | Data Final [{data_final}]")
+        print("  [..] Aguardando tela 'Valores de Entrada'...")
 
-        # 1. AGUARDA OBRIGATORIAMENTE A TELA 'VALORES DE ENTRADA' SER IDENTIFICADA
-        print("  [..] Aguardando identificação da tela 'Valores de Entrada'...")
-        logger.info("Monitorando tela até que o modal 'Valores de Entrada' seja identificado...")
-
-        tpl_tit = self._obter_template("titulo_valores_entrada.png")
-        tpl_aba = self._obter_template("aba_entrada.png")
-        tpl_ok = self._obter_template("botao_ok_entrada.png")
-        tpl_ok_limpo = self._obter_template("botao_ok_real_limpo.png")
-        tpl_lbl_ini = self._obter_template("label_data_inicial.png")
-        tpl_lbl_fim = self._obter_template("label_data_final.png")
-        tpl_lbl_ini_txt = self._obter_template("label_data_inicial_texto.png")
-        tpl_lbl_fim_txt = self._obter_template("label_data_final_texto.png")
-        tpl_box_ini = self._obter_template("campo_data_inicial_box.png")
-
-        pos_tela_identificada = None
-        inicio_espera = time.time()
-
-        while time.time() - inicio_espera < timeout_janela:
-            # 1.1 Tenta identificar pelo Título '- Valores de Entrada'
-            if tpl_tit:
-                for c in [0.85, 0.75, 0.65]:
-                    p = gui.locate_center_on_screen(str(tpl_tit), confidence=c)
-                    if p:
-                        pos_tela_identificada = p
-                        print(f"  [OK] Tela identificada pelo Título '- Valores de Entrada' em {p}!")
-                        break
-            if pos_tela_identificada:
-                break
-
-            # 1.2 Tenta identificar pela Aba 'Entrada'
-            if tpl_aba:
-                for c in [0.85, 0.72]:
-                    p = gui.locate_center_on_screen(str(tpl_aba), confidence=c)
-                    if p:
-                        pos_tela_identificada = p
-                        print(f"  [OK] Tela identificada pela Aba 'Entrada' em {p}!")
-                        break
-            if pos_tela_identificada:
-                break
-
-            # 1.3 Tenta identificar pelo botão Ok
-            if tpl_ok:
-                for c in [0.85, 0.72]:
-                    p = gui.locate_center_on_screen(str(tpl_ok), confidence=c)
-                    if p:
-                        pos_tela_identificada = p
-                        print(f"  [OK] Tela identificada pelo botão Ok em {p}!")
-                        break
-            if pos_tela_identificada:
-                break
-
-            # 1.4 Tenta pelo Label 'Data Inicial'
-            if tpl_lbl_ini:
-                for c in [0.85, 0.70]:
-                    p = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=c)
-                    if p:
-                        pos_tela_identificada = p
-                        print(f"  [OK] Tela identificada pelo label Data Inicial em {p}!")
-                        break
-            if pos_tela_identificada:
-                break
-
-            time.sleep(1.0)
-
-        if not pos_tela_identificada:
-            print("  [X] Tela 'Valores de Entrada' NÃO identificada após timeout. Digitação cancelada.")
-            logger.error("Tela 'Valores de Entrada' não identificada na tela.")
+        posicao_tela = self._aguardar_modal_valores_entrada(timeout_janela)
+        if not posicao_tela:
+            print("  [X] Tela 'Valores de Entrada' não identificada após timeout.")
+            logger.error("Tela 'Valores de Entrada' não identificada.")
             return False
 
-        print("  [OK] Tela 'Valores de Entrada' confirmada e pronta!")
-        print("  [..] Aguardando 5 segundos antes de começar a digitar...")
-        logger.info("Tela 'Valores de Entrada' confirmada. Aguardando 5 segundos antes de iniciar a digitação...")
+        # Pausa solicitada pelo usuário após detectar a tela antes de iniciar a digitação
+        print("  [OK] Tela 'Valores de Entrada' confirmada. Aguardando 5s para digitar...")
         time.sleep(5.0)
 
-        # 2. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA INICIAL'
-        pos_campo_ini = None
-        if tpl_lbl_ini_txt:
-            for c in [0.88, 0.78, 0.68]:
-                p_found = gui.locate_center_on_screen(str(tpl_lbl_ini_txt), confidence=c)
-                if p_found:
-                    pos_campo_ini = (p_found[0] + 45, p_found[1])
-                    break
-
-        if not pos_campo_ini and tpl_box_ini:
-            for c in [0.85, 0.70]:
-                p_found = gui.locate_center_on_screen(str(tpl_box_ini), confidence=c)
-                if p_found:
-                    pos_campo_ini = (p_found[0] - 15, p_found[1])
-                    break
-
-        if not pos_campo_ini and tpl_lbl_ini:
-            p_found = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=0.65)
-            if p_found:
-                pos_campo_ini = (p_found[0] + 80, p_found[1])
-
-        if not pos_campo_ini and tpl_ok:
-            p_found = gui.locate_center_on_screen(str(tpl_ok), confidence=0.65)
-            if p_found:
-                pos_campo_ini = (p_found[0] - 635, p_found[1] + 20)
-
-        if not pos_campo_ini:
-            # Ancoragem a partir do título identificado
-            pos_campo_ini = (pos_tela_identificada[0] - 15, pos_tela_identificada[1] + 50)
-
-        x_campo_ini, y_campo_ini = pos_campo_ini
-        print(f"  [..] Clicando no campo 'Data Inicial' em ({x_campo_ini}, {y_campo_ini}) e digitando com intervalo de 0.5s...")
-        logger.info(f"Clicando no campo Data Inicial em ({x_campo_ini}, {y_campo_ini})...")
-        gui.click(x_campo_ini, y_campo_ini)
+        x_ini, y_ini = self._localizar_campo_data_inicial(posicao_tela)
+        gui.click(x_ini, y_ini)
         time.sleep(0.5)
         gui.type_text(data_inicial.replace("/", ""), interval=0.5)
-        print(f"  [OK] Campo 'Data Inicial' preenchido com sucesso: {data_inicial}")
+        print(f"  [OK] Data Inicial preenchida: {data_inicial}")
         time.sleep(0.5)
 
-        # 3. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA FINAL'
-        pos_campo_fim = None
-        if tpl_lbl_fim_txt:
-            for c in [0.88, 0.78, 0.68]:
-                p_found = gui.locate_center_on_screen(str(tpl_lbl_fim_txt), confidence=c)
-                if p_found:
-                    pos_campo_fim = (p_found[0] + 45, p_found[1])
-                    break
-
-        if pos_campo_fim:
-            x_campo_fim, y_campo_fim = pos_campo_fim
-        else:
-            x_campo_fim = x_campo_ini
-            y_campo_fim = y_campo_ini + 27
-        print(f"  [..] Clicando no campo 'Data Final' em ({x_campo_fim}, {y_campo_fim}) e digitando com intervalo de 0.5s...")
-        logger.info(f"Clicando no campo Data Final em ({x_campo_fim}, {y_campo_fim})...")
-        gui.click(x_campo_fim, y_campo_fim)
+        x_fim, y_fim = self._localizar_campo_data_final((x_ini, y_ini))
+        gui.click(x_fim, y_fim)
         time.sleep(0.5)
         gui.type_text(data_final.replace("/", ""), interval=0.5)
-        print(f"  [OK] Campo 'Data Final' preenchido com sucesso:   {data_final}")
+        print(f"  [OK] Data Final preenchida:   {data_final}")
         time.sleep(0.5)
 
-        # 4. PAUSA DE 5 SEGUNDOS PARA CONFERÊNCIA VISUAL
-        print("  [..] Aguardando 5 segundos antes de clicar em Ok para conferência visual...")
-        logger.info("Aguardando 5 segundos antes de acionar o botão Ok do modal Valores de Entrada...")
+        # Pausa para conferência visual antes de confirmar o modal
+        print("  [..] Aguardando 5s antes de clicar em Ok...")
         time.sleep(5.0)
 
-        # 5. LOCALIZA E CLICA NO BOTÃO 'OK' DO MODAL VALORES DE ENTRADA
-        pos_ok = None
-        for tpl in [tpl_ok, tpl_ok_limpo]:
-            if tpl and not pos_ok:
-                for conf in [0.85, 0.70, 0.55]:
-                    p = gui.locate_center_on_screen(str(tpl), confidence=conf)
-                    if p:
-                        pos_ok = p
-                        break
+        posicao_ok = self._localizar_com_confiancas(
+            self._obter_template("botao_ok_entrada.png"),
+            (0.85, 0.70, 0.55),
+        ) or self._localizar_com_confiancas(
+            self._obter_template("botao_ok_real_limpo.png"),
+            (0.85, 0.70, 0.55),
+        )
 
-        if pos_ok:
-            logger.info(f"Botão 'Ok' visual localizado em {pos_ok}! Clicando...")
-            gui.click(pos_ok[0], pos_ok[1])
-            print(f"  [OK] Botão 'Ok' clicado com sucesso!")
+        if posicao_ok:
+            gui.click(posicao_ok[0], posicao_ok[1])
+            print("  [OK] Botão 'Ok' clicado com sucesso!")
         else:
-            logger.info("Acionando botão 'Ok' via atalho universal do Delphi (Alt+O)...")
             gui.hotkey("alt", "o")
-            print(f"  [OK] Botão 'Ok' acionado via atalho Alt+O!")
+            print("  [OK] Botão 'Ok' acionado via atalho Alt+O!")
 
         time.sleep(2.5)
-
-        logger.info(f"Passo 6 executado com sucesso! Relatório disparado para geração ({data_inicial} até {data_final}).")
         return True
 
     def aguardar_arquivo_pdf_estabilizado(
@@ -797,330 +625,224 @@ class SeniorService:
         nome_esperado: str,
         timeout_segundos: int = 600,
     ) -> Optional[Path]:
-        """
-        Aguarda o relatório ser totalmente gerado na pasta pelo Senior,
-        garante que o cabeçalho seja PDF válido (%PDF), estabiliza o tamanho
-        (sem alteração por 3s) e valida a integridade com PdfReader antes de liberar para o próximo passo.
-        """
-        from pypdf import PdfReader
+        """Aguarda o PDF consolidado ser gravado, estabilizar em tamanho e validar páginas."""
         arquivo_alvo = pasta / nome_esperado
         inicio = time.time()
         ultimo_tamanho = -1
 
-        logger.info(f"Monitorando pasta '{pasta}' aguardando arquivo PDF finalizado e íntegro...")
-
         while time.time() - inicio < timeout_segundos:
             candidato = None
-
-            # 1. Procura primeiro pelo arquivo com o nome esperado
             if arquivo_alvo.exists() and arquivo_alvo.stat().st_size > 0:
                 candidato = arquivo_alvo
             else:
-                # Procura outros arquivos .pdf gerados na pasta
-                candidatos_pdf = [f for f in pasta.glob("HRCP*.pdf") if f.is_file() and f.stat().st_size > 0]
+                candidatos_pdf = [arq for arq in pasta.glob("HRCP*.pdf") if arq.is_file() and arq.stat().st_size > 0]
                 if candidatos_pdf:
-                    candidatos_pdf.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                    candidatos_pdf.sort(key=lambda arq: arq.stat().st_mtime, reverse=True)
                     mais_recente = candidatos_pdf[0]
                     if mais_recente != arquivo_alvo:
                         try:
                             if arquivo_alvo.exists():
                                 arquivo_alvo.unlink()
                             mais_recente.rename(arquivo_alvo)
-                            logger.info(f"Arquivo renomeado para o padrão final: {mais_recente.name} -> {arquivo_alvo.name}")
                             candidato = arquivo_alvo
                         except Exception:
                             candidato = mais_recente
                     else:
                         candidato = mais_recente
 
-            # 2. Se encontrou candidato, verifica o cabeçalho binário (deve começar com %PDF)
             if candidato and candidato.exists():
-                tam_atual = candidato.stat().st_size
-                if tam_atual > 0:
+                tamanho_atual = candidato.stat().st_size
+                if tamanho_atual > 0:
                     try:
-                        with open(candidato, "rb") as f_head:
-                            header = f_head.read(8)
-                        
-                        if not header.startswith(b"%PDF"):
-                            logger.info(
-                                f"Arquivo '{candidato.name}' detectado ({tam_atual} bytes), "
-                                f"mas ainda não possui cabeçalho PDF válido (%PDF). Aguardando Senior converter/finalizar..."
-                            )
+                        with open(candidato, "rb") as arquivo_binario:
+                            cabecalho = arquivo_binario.read(8)
+                        if not cabecalho.startswith(b"%PDF"):
                             time.sleep(3)
                             continue
-                    except Exception as e_head:
-                        logger.info(f"Arquivo bloqueado pelo Senior para leitura de cabeçalho: {e_head}. Aguardando...")
+                    except Exception:
                         time.sleep(3)
                         continue
 
-                    # 3. Cabeçalho é %PDF! Agora verifica se o tamanho está estabilizado
-                    if tam_atual == ultimo_tamanho:
+                    if tamanho_atual == ultimo_tamanho:
                         try:
-                            with open(candidato, "rb") as f_test:
-                                reader = PdfReader(f_test)
-                                num_pags = len(reader.pages)
-                                if num_pags > 0:
-                                    logger.info(
-                                        f"Arquivo PDF validado com sucesso e 100% íntegro: '{candidato.name}' "
-                                        f"({num_pags} páginas, {tam_atual} bytes)."
-                                    )
+                            with open(candidato, "rb") as arquivo_teste:
+                                leitor = PdfReader(arquivo_teste)
+                                if len(leitor.pages) > 0:
                                     return candidato
-                        except Exception as e_pdf:
-                            logger.info(f"PDF ainda sendo gravado/fechado pelo Senior ({e_pdf}). Aguardando estabilização...")
+                        except Exception:
+                            pass
                     else:
-                        logger.info(f"Arquivo PDF em gravação pelo Senior... Tamanho atual: {tam_atual} bytes. Aguardando estabilização...")
-                        ultimo_tamanho = tam_atual
-                else:
-                    logger.info("Arquivo PDF detectado com 0 bytes. Aguardando Senior iniciar a escrita...")
-
-            tempo_decorrido = int(time.time() - inicio)
-            if tempo_decorrido % 15 == 0 and tempo_decorrido > 0:
-                logger.info(f"Aguardando PDF ser finalizado na rede ({tempo_decorrido}s / {timeout_segundos}s)...")
+                        ultimo_tamanho = tamanho_atual
 
             time.sleep(3)
 
-        logger.error(f"Timeout de {timeout_segundos}s aguardando arquivo PDF ser finalizado em '{pasta}'.")
+        logger.error(f"Timeout de {timeout_segundos}s aguardando PDF em '{pasta}'.")
         return None
 
     def selecionar_tipo_arquivo_pdf(self) -> bool:
-        """
-        Garante que o campo 'Tipo:' do modal 'Salvar como' seja alterado
-        de 'Arquivos Impressos (*.imp)' para 'Arquivo PDF (*.pdf)'.
-        Utiliza visão computacional com o template real do item dropdown e validação estrita.
-        """
-        tpl_combo_imp = self._obter_template("combo_tipo_imp.png")
-        tpl_lbl_tipo = self._obter_template("label_tipo.png")
-        tpl_item_pdf = self._obter_template("item_dropdown_pdf_real.png")
+        """Altera o campo Tipo de 'Arquivos Impressos (*.imp)' para 'Arquivo PDF (*.pdf)'."""
+        template_combo_imp = self._obter_template("combo_tipo_imp.png")
+        template_label_tipo = self._obter_template("label_tipo.png")
+        template_item_pdf = self._obter_template("item_dropdown_pdf_real.png")
 
         for tentativa in range(1, 4):
-            logger.info(f"Tentativa {tentativa} de selecionar Tipo 'Arquivo PDF (*.pdf)'...")
-
-            # 1. Se o dropdown já estiver aberto e o item for visível na tela, clica direto nele!
-            if tpl_item_pdf:
-                pos_direto = gui.locate_center_on_screen(str(tpl_item_pdf), confidence=0.72)
-                if pos_direto:
-                    logger.info(f"Item 'Arquivo PDF (*.pdf)' já visível na tela em {pos_direto}! Clicando...")
-                    gui.click(pos_direto[0], pos_direto[1])
+            if template_item_pdf:
+                posicao_item = gui.locate_center_on_screen(str(template_item_pdf), confidence=0.72)
+                if posicao_item:
+                    gui.click(posicao_item[0], posicao_item[1])
                     time.sleep(0.5)
-                    # Verifica se o .imp sumiu
-                    if not (tpl_combo_imp and gui.is_visible(str(tpl_combo_imp), confidence=0.75)):
-                        logger.info("VALIDADO: Tipo 'Arquivo PDF (*.pdf)' selecionado com sucesso!")
+                    if not (template_combo_imp and gui.is_visible(str(template_combo_imp), confidence=0.75)):
                         return True
 
-            # 2. Localiza a combobox de Tipo
-            pos_combo = None
-            if tpl_combo_imp:
-                pos_combo = gui.locate_center_on_screen(str(tpl_combo_imp), confidence=0.75)
+            posicao_combo = None
+            if template_combo_imp:
+                posicao_combo = gui.locate_center_on_screen(str(template_combo_imp), confidence=0.75)
+            if not posicao_combo and template_label_tipo:
+                posicao_label = gui.locate_center_on_screen(str(template_label_tipo), confidence=0.75)
+                if posicao_label:
+                    posicao_combo = (posicao_label[0] + 110, posicao_label[1])
 
-            if not pos_combo and tpl_lbl_tipo:
-                pos_lbl = gui.locate_center_on_screen(str(tpl_lbl_tipo), confidence=0.75)
-                if pos_lbl:
-                    pos_combo = (pos_lbl[0] + 110, pos_lbl[1])
-
-            if pos_combo:
-                # Clica na combobox para abrir a lista suspensa
-                logger.info(f"Clicando na combobox do Tipo em {pos_combo} para abrir o dropdown...")
-                gui.click(pos_combo[0], pos_combo[1])
+            if posicao_combo:
+                gui.click(posicao_combo[0], posicao_combo[1])
                 time.sleep(0.5)
-
-                # Com o dropdown aberto, procura o item 'Arquivo PDF (*.pdf)' por imagem
-                pos_item = None
-                if tpl_item_pdf:
-                    pos_item = gui.locate_center_on_screen(str(tpl_item_pdf), confidence=0.70)
-
-                if pos_item:
-                    logger.info(f"Opção 'Arquivo PDF (*.pdf)' detectada no dropdown em: {pos_item}! Clicando...")
-                    gui.click(pos_item[0], pos_item[1])
-                    time.sleep(0.5)
+                posicao_item = (
+                    gui.locate_center_on_screen(str(template_item_pdf), confidence=0.70)
+                    if template_item_pdf
+                    else None
+                )
+                if posicao_item:
+                    gui.click(posicao_item[0], posicao_item[1])
                 else:
-                    # Fallback com dropdown aberto: tecla seta para baixo e Enter
-                    logger.info("Opção no dropdown não detectada por template. Acionando tecla Down + Enter...")
                     gui.press("down")
                     time.sleep(0.3)
                     gui.press("enter")
-                    time.sleep(0.5)
+                time.sleep(0.5)
 
-            # 3. Validação visual: o texto '.imp' não pode mais estar visível na combobox
-            if tpl_combo_imp:
-                if not gui.is_visible(str(tpl_combo_imp), confidence=0.75):
-                    logger.info("VALIDAÇÃO CONCLUÍDA: O campo Tipo agora é 'Arquivo PDF (*.pdf)'!")
-                    return True
-                else:
-                    logger.warning(f"Tentativa {tentativa}: O campo Tipo ainda exibe 'Arquivos Impressos (*.imp)'.")
-            else:
+            if not template_combo_imp or not gui.is_visible(str(template_combo_imp), confidence=0.75):
                 return True
+            logger.warning(f"Tentativa {tentativa}: campo Tipo ainda exibe '*.imp'.")
 
         logger.error("Falha ao alterar o campo Tipo para PDF após 3 tentativas.")
         return False
 
-    def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None, modelo: str = "702") -> Optional[Path]:
-        """
-        PASSO 7:
-        Aguarda o relatório ser gerado pelo Senior, clica no ícone do disquete ('Salvar'),
-        seleciona obrigatoriamente o tipo 'Arquivo PDF (*.pdf)',
-        navega até a pasta específica com a DATA DA EXECUÇÃO (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026),
-        salva o arquivo como HRCP702_DDMMAAAA.pdf e aguarda a finalização e estabilização completa do PDF.
-        """
-        from datetime import datetime
-        import pyperclip
+    def _aguardar_relatorio_pronto(self) -> Optional[Tuple[int, int]]:
+        """Monitora o modal 'Aguarde...' sem corte fixo até a janela do relatório abrir."""
+        template_disquete = self._obter_template("icone_salvar_disquete.png")
+        template_titulo_relatorio = self._obter_template("titulo_visualizacao_relatorio.png")
+        template_aguarde = self._obter_template("modal_aguarde_preparando.png")
 
+        print("\n  [..] Monitorando geração do relatório: aguardando modal 'Aguarde...' sumir...")
+        modal_detectado = False
+        for _ in range(8):
+            if template_aguarde and gui.locate_center_on_screen(str(template_aguarde), confidence=0.75):
+                modal_detectado = True
+                print("  [..] Modal 'Aguarde, preparando a solicitação...' confirmado na tela.")
+                break
+            time.sleep(1.0)
+
+        inicio = time.time()
+        ultimo_log_segundo = -1
+        while True:
+            modal_visivel = bool(
+                template_aguarde and gui.locate_center_on_screen(str(template_aguarde), confidence=0.78)
+            )
+            if modal_visivel:
+                modal_detectado = True
+
+            if modal_detectado and not modal_visivel:
+                print("\n  [OK] Processamento do Senior concluído! Localizando botão Salvar...")
+                time.sleep(2.0)
+                gui.focar_janela("Visualização do Relatório")
+                time.sleep(0.5)
+                posicao_disquete = self._localizar_com_confiancas(template_disquete, (0.82, 0.70, 0.58))
+                if not posicao_disquete and template_titulo_relatorio:
+                    posicao_titulo = gui.locate_center_on_screen(str(template_titulo_relatorio), confidence=0.65)
+                    if posicao_titulo:
+                        return posicao_titulo[0] + 240, posicao_titulo[1] + 25
+                return posicao_disquete
+
+            if template_disquete:
+                posicao_disquete = gui.locate_center_on_screen(str(template_disquete), confidence=0.75)
+                if posicao_disquete:
+                    print("  [OK] Ícone do Disquete detectado na tela!")
+                    return posicao_disquete
+
+            if template_titulo_relatorio and (not modal_detectado or not modal_visivel):
+                posicao_titulo = gui.locate_center_on_screen(str(template_titulo_relatorio), confidence=0.78)
+                if posicao_titulo:
+                    print("  [OK] Janela de Visualização do Relatório detectada! Localizando disquete...")
+                    time.sleep(1.5)
+                    gui.focar_janela("Visualização do Relatório")
+                    for _ in range(5):
+                        posicao_disquete = self._localizar_com_confiancas(template_disquete, (0.85, 0.75, 0.65))
+                        if posicao_disquete:
+                            return posicao_disquete
+                        time.sleep(0.8)
+                    return posicao_titulo[0] + 240, posicao_titulo[1] + 25
+
+            tempo_decorrido = int(time.time() - inicio)
+            if tempo_decorrido % 15 == 0 and tempo_decorrido != ultimo_log_segundo:
+                ultimo_log_segundo = tempo_decorrido
+                print(f"  [..] Senior processando... ({tempo_decorrido // 60}m {tempo_decorrido % 60}s)")
+
+            time.sleep(2)
+
+    def aguardar_relatorio_e_salvar(
+        self,
+        caminho_destino_pdf: Optional[Path] = None,
+        timeout_segundos: Optional[int] = None,
+        modelo: str = "702",
+    ) -> Optional[Path]:
+        """Aguarda a geração do relatório no Senior e salva em PDF na subpasta da data."""
         timeout_max = timeout_segundos or settings.SENIOR_TIMEOUT_RELATORIO_SEGUNDOS
-
-        # 1. Define a pasta base e a subpasta com a DATA DA EXECUÇÃO (ex: 08112026)
-        pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO or r"V:\grp-aud-doc\DIGITALY_CARTAO_PONTO")
-        data_hoje_str = datetime.now().strftime("%d%m%Y")
-        pasta_destino = pasta_base / data_hoje_str
+        pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO or PASTA_REDE_PADRAO)
+        data_hoje = datetime.now().strftime("%d%m%Y")
+        pasta_destino = pasta_base / data_hoje
 
         try:
             pasta_destino.mkdir(parents=True, exist_ok=True)
             (pasta_destino / "individuais").mkdir(parents=True, exist_ok=True)
             (pasta_destino / "relatorios").mkdir(parents=True, exist_ok=True)
-            logger.info(f"Pasta da execução do dia criada/confirmada na rede: {pasta_destino}")
-        except Exception as e:
-            logger.error(f"Erro ao criar pastas de rede em '{pasta_destino}': {e}")
+        except Exception as erro:
+            logger.error(f"Erro ao criar pastas em '{pasta_destino}': {erro}")
 
-        nome_consolidado_padrao = f"HRCP{modelo}_{data_hoje_str}.pdf"
         if caminho_destino_pdf:
             arquivo_final = Path(caminho_destino_pdf)
             arquivo_final.parent.mkdir(parents=True, exist_ok=True)
         else:
-            arquivo_final = pasta_destino / nome_consolidado_padrao
+            arquivo_final = pasta_destino / f"HRCP{modelo}_{data_hoje}.pdf"
 
-        logger.info(f"PASSO 7: Aguardando relatório ser gerado pelo Senior (timeout: {timeout_max}s / ~{timeout_max//60} min)...")
-        logger.info(f"Arquivo final será salvo em: {arquivo_final}")
-
-        tpl_disquete = self._obter_template("icone_salvar_disquete.png")
-        tpl_tit_rel = self._obter_template("titulo_visualizacao_relatorio.png")
-        tpl_vis = self._obter_template("barra_visualizar_100.png")
-        tpl_btn_salvar = self._obter_template("botao_salvar_dialogo.png")
-        tpl_aguarde = self._obter_template("modal_aguarde_preparando.png")
-
-        inicio = time.time()
-        pos_disquete = None
-        modal_aguarde_detectado = False
-        ultimo_log_segundo = -1
-
-        print(f"\n  [..] Monitorando geração do relatório (timeout máximo: {timeout_max//60} min)...")
-
-        # 2. Estratégia Principal: Aguarda o modal 'Aguarde, preparando a solicitação ...' SUMIR (sem limite de 20 min)
-        print("\n  [..] Monitorando geração do relatório: aguardando o modal 'Aguarde...' sumir da tela...")
-        logger.info("Iniciando monitoramento: aguardando até o modal 'Aguarde, preparando a solicitação ...' sumir.")
-
-        # Confirma se o modal apareceu
-        modal_aguarde_detectado = False
-        for _ in range(8):
-            if tpl_aguarde and gui.locate_center_on_screen(str(tpl_aguarde), confidence=0.75):
-                modal_aguarde_detectado = True
-                print("  [..] Modal 'Aguarde, preparando a solicitação ...' confirmado na tela!")
-                logger.info("Modal 'Aguarde, preparando a solicitação ...' detectado. Aguardando sumir...")
-                break
-            time.sleep(1.0)
-
-        # Loop contínuo: aguarda até o modal SUMIR (sem timeout fixo)
-        inicio = time.time()
-        ultimo_log_segundo = -1
-        while True:
-            # 2.1 Verifica se o modal ainda está visível na tela
-            modal_visivel = False
-            if tpl_aguarde:
-                pos_aguarde = gui.locate_center_on_screen(str(tpl_aguarde), confidence=0.78)
-                if pos_aguarde:
-                    modal_visivel = True
-                    modal_aguarde_detectado = True
-
-            # 2.2 Se o modal estava ativo e agora SUMIU da tela: geração concluída!
-            if modal_aguarde_detectado and not modal_visivel:
-                print("\n  [OK] O modal 'Aguarde, preparando a solicitação ...' SUMIU da tela!")
-                print("  [OK] Processamento do Senior concluído! Avançando para salvar o relatório...")
-                logger.info("Modal 'Aguarde' sumiu da tela! Relatório concluído.")
-                time.sleep(2.0)
-                gui.focar_janela("Visualização do Relatório")
-                time.sleep(0.5)
-                # Localiza o disquete para salvar
-                if tpl_disquete:
-                    for c in [0.82, 0.70, 0.58]:
-                        pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=c)
-                        if pos_disquete:
-                            break
-                if not pos_disquete and tpl_tit_rel:
-                    pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.65)
-                    if pos_tit:
-                        pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
-                break
-
-            # 2.3 Verificação concorrente: se o disquete ou a tela de visualização já surgiram
-            if tpl_disquete:
-                pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.75)
-                if pos_disquete:
-                    print("  [OK] Ícone do Disquete detectado na tela!")
-                    break
-
-            if tpl_tit_rel and (modal_aguarde_detectado is False or not modal_visivel):
-                pos_tit = gui.locate_center_on_screen(str(tpl_tit_rel), confidence=0.78)
-                if pos_tit:
-                    print("  [OK] Janela de Visualização do Relatório detectada! Localizando ícone do disquete...")
-                    time.sleep(1.5)
-                    gui.focar_janela("Visualização do Relatório")
-                    if tpl_disquete:
-                        for _ in range(5):
-                            for c in [0.85, 0.75, 0.65]:
-                                pos_disquete = gui.locate_center_on_screen(str(tpl_disquete), confidence=c)
-                                if pos_disquete:
-                                    break
-                            if pos_disquete:
-                                break
-                            time.sleep(0.8)
-                    if not pos_disquete:
-                        pos_disquete = (pos_tit[0] + 240, pos_tit[1] + 25)
-                    break
-
-            tempo_decorrido = int(time.time() - inicio)
-            if tempo_decorrido % 15 == 0 and tempo_decorrido != ultimo_log_segundo:
-                ultimo_log_segundo = tempo_decorrido
-                minutos = tempo_decorrido // 60
-                segundos = tempo_decorrido % 60
-                logger.info(f"Senior compilando relatório de ponto... ({minutos}m {segundos}s decorridos)")
-                print(f"  [..] Senior processando... ({minutos}m {segundos}s decorridos)")
-
-            time.sleep(2)
-
-        if not pos_disquete:
-            logger.error(f"Timeout de {timeout_max}s: Janela de relatório não apareceu na tela.")
+        posicao_disquete = self._aguardar_relatorio_pronto()
+        if not posicao_disquete:
+            logger.error("Não foi possível localizar o ícone de Salvar do relatório.")
             return None
 
-        # 3. Foca na janela de Visualização e clica no disquete
-        logger.info("Trazendo janela 'Visualização do Relatório' para foco...")
         gui.focar_janela("Visualização do Relatório")
         time.sleep(0.5)
-
-        print(f"  [..] Clicando no ícone de Salvar (Disquete) em {pos_disquete}...")
-        logger.info(f"Clicando no ícone do disquete (Salvar) em {pos_disquete}...")
-        gui.click(pos_disquete[0], pos_disquete[1])
+        print(f"  [..] Clicando no ícone de Salvar em {posicao_disquete}...")
+        gui.click(posicao_disquete[0], posicao_disquete[1])
         time.sleep(2.0)
 
-        # Confirma se a janela 'Salvar como' realmente abriu; se não, tenta clicar novamente no disquete ou Ctrl+S
-        abriu_salvar = False
-        if tpl_btn_salvar:
-            for _ in range(4):
-                if gui.locate_center_on_screen(str(tpl_btn_salvar), confidence=0.70):
-                    abriu_salvar = True
-                    break
-                time.sleep(0.5)
-        if not abriu_salvar:
-            print("  [..] Reenviando clique no ícone Salvar / Ctrl+S para abrir diálogo...")
-            if tpl_disquete:
-                p_nova = gui.locate_center_on_screen(str(tpl_disquete), confidence=0.65)
-                if p_nova:
-                    gui.click(p_nova[0], p_nova[1])
-                else:
-                    gui.hotkey("ctrl", "s")
+        template_btn_salvar = self._obter_template("botao_salvar_dialogo.png")
+        template_disquete = self._obter_template("icone_salvar_disquete.png")
+        abriu_dialogo = any(
+            template_btn_salvar and gui.locate_center_on_screen(str(template_btn_salvar), confidence=0.70)
+            for _ in range(4)
+            if not time.sleep(0.5)
+        )
+        if not abriu_dialogo:
+            posicao_nova = (
+                gui.locate_center_on_screen(str(template_disquete), confidence=0.65)
+                if template_disquete
+                else None
+            )
+            if posicao_nova:
+                gui.click(posicao_nova[0], posicao_nova[1])
             else:
                 gui.hotkey("ctrl", "s")
             time.sleep(2.0)
 
-        # 4. Navega obrigatoriamente para dentro da pasta da data (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026)
-        print(f"  [..] Preenchendo pasta destino e salvando como PDF: {arquivo_final.name}...")
-        logger.info(f"Navegando o diálogo Salvar como para a pasta da data: '{pasta_destino}'...")
+        print(f"  [..] Salvando PDF '{arquivo_final.name}' em '{pasta_destino}'...")
         gui.hotkey("alt", "n")
         time.sleep(0.3)
         gui.hotkey("ctrl", "a")
@@ -1131,86 +853,58 @@ class SeniorService:
         gui.press("enter")
         time.sleep(1.2)
 
-        # 5. Seleciona e VALIDA obrigatoriamente o Tipo: 'Arquivo PDF (*.pdf)'
-        logger.info("Selecionando e validando Tipo de Arquivo como 'Arquivo PDF (*.pdf)'...")
-        tipo_ok = self.selecionar_tipo_arquivo_pdf()
-        if not tipo_ok:
-            logger.warning("Aviso: Validação visual do Tipo PDF não confirmou alteração. Prosseguindo...")
+        if not self.selecionar_tipo_arquivo_pdf():
+            logger.warning("Validação visual do tipo PDF não confirmou alteração.")
 
-        # 6. Preenche o nome do arquivo no campo 'Nome:'
-        nome_arquivo = arquivo_final.name
-        logger.info(f"Inserindo nome do arquivo '{nome_arquivo}' no campo Nome...")
         gui.hotkey("alt", "n")
         time.sleep(0.3)
         gui.hotkey("ctrl", "a")
         gui.press("backspace")
-        pyperclip.copy(nome_arquivo)
+        pyperclip.copy(arquivo_final.name)
         gui.hotkey("ctrl", "v")
         time.sleep(0.5)
 
-        # 7. Clica em 'Salvar'
-        salvo_clicado = False
-        if tpl_btn_salvar:
-            pos_btn_salvar = gui.locate_center_on_screen(str(tpl_btn_salvar), confidence=0.75)
-            if pos_btn_salvar:
-                logger.info(f"Clicando no botão 'Salvar' em {pos_btn_salvar}...")
-                gui.click(pos_btn_salvar[0], pos_btn_salvar[1])
-                salvo_clicado = True
-
-        if not salvo_clicado:
-            logger.info("Acionando botão 'Salvar' via atalho Alt+S / Enter...")
+        posicao_salvar = (
+            gui.locate_center_on_screen(str(template_btn_salvar), confidence=0.75)
+            if template_btn_salvar
+            else None
+        )
+        if posicao_salvar:
+            gui.click(posicao_salvar[0], posicao_salvar[1])
+        else:
             gui.hotkey("alt", "s")
             time.sleep(0.3)
             gui.press("enter")
 
         time.sleep(1.5)
-
-        # Trata possível modal de confirmação de substituição ('Deseja substituí-lo? Sim')
+        # Confirma eventual modal de sobrescrita ('Deseja substituí-lo? Sim')
         gui.hotkey("alt", "s")
         time.sleep(0.3)
         gui.press("enter")
         time.sleep(2)
 
-        # 8. Aguarda o arquivo ser totalmente carregado na pasta, virar .pdf real e estabilizar o tamanho
-        print(f"  [..] Aguardando arquivo PDF '{arquivo_final.name}' ser gravado e estabilizado em '{pasta_destino}'...")
-        logger.info(f"Aguardando arquivo ser gerado e estabilizado como PDF em '{pasta_destino}'...")
+        print(f"  [..] Aguardando estabilização do PDF '{arquivo_final.name}'...")
         arquivo_validado = self.aguardar_arquivo_pdf_estabilizado(
             pasta=pasta_destino,
             nome_esperado=arquivo_final.name,
             timeout_segundos=timeout_max,
         )
 
-        # Salva print de auditoria do Passo 7
-        try:
-            print_salvo = self.prints_dir / "10_relatorio_consolidado_salvo.png"
-            gui.screenshot(save_to=str(print_salvo))
-            logger.info(f"Print pós-salvamento registrado em: {print_salvo}")
-        except Exception:
-            pass
-
         if arquivo_validado and arquivo_validado.exists():
-            logger.info(f"Passo 7 executado com sucesso! Arquivo consolidado pronto: {arquivo_validado}")
             return arquivo_validado
-        else:
-            logger.warning("Passo 7 concluído mas a gravação e estabilização do arquivo não pôde ser confirmada.")
-            return arquivo_final
+        return arquivo_final
 
     def executar_fluxo_extracao(
         self,
         caminho_saida_pdf: Path,
         modo: ModoExecucao | str = ModoExecucao.AUTO,
     ) -> Tuple[PeriodoCartao, Path]:
-        """Executa a sequência completa de passos do Senior Desktop."""
+        """Executa a sequência completa de extração no Senior Desktop."""
         periodo = self.calcular_periodo_datas(modo=modo)
-        logger.info(
-            f"Iniciando extração no Senior para o modo [{periodo.modo_aplicado}]. Período: {periodo.data_inicial} a {periodo.data_final}"
-        )
-
         self.abrir_sistema_senior()
         self.autenticar_senior()
         self.navegar_para_cartao_ponto()
         self.selecionar_relatorio_702()
         self.preencher_datas_e_gerar(periodo.data_inicial, periodo.data_final)
         caminho_final = self.aguardar_relatorio_e_salvar(caminho_saida_pdf)
-
         return periodo, caminho_final

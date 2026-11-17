@@ -1,25 +1,20 @@
-"""
-Script de execução local e depuração do Robô RH - Envio de Cartão Ponto.
-Padrão Digitaly Technology para testes rápidos e execuções manuais.
-"""
+"""Script de execução local via terminal para o Robô RH - Envio de Cartão Ponto."""
+
 import argparse
 import sys
-import os
 from pathlib import Path
 
-# Adiciona o diretório raiz ao PYTHONPATH
-ROOT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT_DIR))
+DIRETORIO_RAIZ = Path(__file__).resolve().parent
+if str(DIRETORIO_RAIZ) not in sys.path:
+    sys.path.insert(0, str(DIRETORIO_RAIZ))
 
-from core.logger import get_logger
-from services.orquestrador import OrquestradorCartaoPonto
 from services.colaboradores_service import ColaboradoresService
+from services.orquestrador import OrquestradorCartaoPonto
 from services.senior_service import SeniorService
 
-logger = get_logger("rodar_local")
 
-
-def main():
+def main() -> None:
+    """Interpreta os argumentos de linha de comando e executa o fluxo selecionado."""
     parser = argparse.ArgumentParser(
         description="Executa o robô RH - Envio de Cartão Ponto (Unimed Vale do Aço)"
     )
@@ -55,64 +50,54 @@ def main():
     parser.add_argument(
         "--listar-colaboradores",
         action="store_true",
-        help="Apenas lista os colaboradores encontrados na planilha e encerra",
+        help="Lista os colaboradores encontrados na planilha e encerra",
     )
     parser.add_argument(
         "--ver-periodo",
         action="store_true",
-        help="Apenas calcula e exibe as datas inicial e final para o modo selecionado",
+        help="Calcula e exibe as datas inicial e final para o modo selecionado",
     )
+    argumentos = parser.parse_args()
 
-    args = parser.parse_args()
-
-    # Opção: Apenas ver período calculado
-    if args.ver_periodo:
-        periodo = SeniorService.calcular_periodo_datas(modo=args.modo)
-        print(f"\n[PERÍODO CALCULADO - PDD]")
-        print(f"Modo Aplicado: Dia {periodo.modo_aplicado}")
-        print(f"Data Inicial : {periodo.data_inicial}")
-        print(f"Data Final   : {periodo.data_final}\n")
+    if argumentos.ver_periodo:
+        periodo = SeniorService.calcular_periodo_datas(modo=argumentos.modo)
+        print(f"\nModo: Dia {periodo.modo_aplicado} | {periodo.data_inicial} até {periodo.data_final}\n")
         return
 
-    # Opção: Apenas listar colaboradores da planilha
-    if args.listar_colaboradores:
-        print("\nCarregando colaboradores da planilha...")
-        colabs = ColaboradoresService.carregar_colaboradores()
-        print(f"Total: {len(colabs)} colaborador(es) encontrado(s):")
-        for c in colabs:
-            print(f" - Matrícula: {c.matricula:<8} | Nome: {c.nome:<30} | Setor: {c.setor:<20} | Email: {c.email}")
+    if argumentos.listar_colaboradores:
+        colaboradores = ColaboradoresService.carregar_colaboradores()
+        print(f"\nTotal: {len(colaboradores)} colaborador(es):")
+        for colaborador in colaboradores:
+            print(
+                f" - {colaborador.matricula:<8} | {colaborador.nome:<30} | {colaborador.email}"
+            )
         print()
         return
 
-    # Execução do Orquestrador
-    print(f"\nIniciando execução no modo: [{args.modo}]...")
     orquestrador = OrquestradorCartaoPonto()
     resultado = orquestrador.executar(
-        modo=args.modo,
-        enviar_email=(not args.sem_email),
-        extrair_senior=(not args.sem_senior),
-        caminho_consolidado_existente=args.consolidado,
-        matriculas_filtro=args.matricula,
+        modo=argumentos.modo,
+        enviar_email=not argumentos.sem_email,
+        extrair_senior=not argumentos.sem_senior,
+        caminho_consolidado_existente=argumentos.consolidado,
+        matriculas_filtro=argumentos.matricula,
     )
 
     print("\n" + "=" * 60)
-    print("RESULTADO DA EXECUÇÃO:")
-    print("=" * 60)
-    print(f"Sucesso Geral: {'SIM' if resultado.sucesso else 'NÃO'}")
-    print(f"Modo: Dia {resultado.modo}")
+    print(f"Sucesso: {'SIM' if resultado.sucesso else 'NÃO'} | Modo: Dia {resultado.modo}")
     if resultado.periodo:
         print(f"Período: {resultado.periodo.data_inicial} até {resultado.periodo.data_final}")
-    print(f"Total Colaboradores: {resultado.total_colaboradores}")
-    print(f"Total Sucessos     : {resultado.total_sucesso}")
-    print(f"Total Falhas       : {resultado.total_erro}")
+    print(
+        f"Colaboradores: {resultado.total_colaboradores} | "
+        f"Sucessos: {resultado.total_sucesso} | Falhas: {resultado.total_erro}"
+    )
     if resultado.caminho_consolidado:
-        print(f"PDF Consolidado    : {resultado.caminho_consolidado}")
+        print(f"PDF Consolidado: {resultado.caminho_consolidado}")
     if resultado.caminho_relatorio:
-        print(f"Relatório Excel    : {resultado.caminho_relatorio}")
-    print(f"Mensagem           : {resultado.mensagem}")
+        print(f"Relatório Excel: {resultado.caminho_relatorio}")
+    print(f"Mensagem: {resultado.mensagem}")
     print("=" * 60 + "\n")
 
 
 if __name__ == "__main__":
     main()
-

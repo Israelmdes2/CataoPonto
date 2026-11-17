@@ -2,25 +2,34 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List
+
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from core.config import settings
 from schemas.execucao import RegistroExecucaoColaborador
 
 logger = logging.getLogger(__name__)
 
+CABECALHOS_RELATORIO = [
+    "Data Execução",
+    "Matrícula",
+    "Colaborador",
+    "Email",
+    "Status",
+    "MotivoErro",
+]
+
 
 class RelatorioService:
+    """Serviço responsável pela geração da planilha de controle de execução."""
+
     @staticmethod
     def gerar_nome_arquivo(momento_execucao: datetime | None = None) -> str:
-        """
-        Formato especificado no PDD:
-        DDMMAAAA-HHMM– Envio de Cartão Ponto.xlsx
-        """
-        dt = momento_execucao or datetime.now()
-        timestamp = dt.strftime("%d%m%Y-%H%M")
-        return f"{timestamp}– Envio de Cartão Ponto.xlsx"
+        """Retorna o nome padronizado da planilha de controle conforme PDD."""
+        data_hora = momento_execucao or datetime.now()
+        marca_tempo = data_hora.strftime("%d%m%Y-%H%M")
+        return f"{marca_tempo}– Envio de Cartão Ponto.xlsx"
 
     @classmethod
     def gerar_relatorio_execucao(
@@ -29,74 +38,55 @@ class RelatorioService:
         pasta_destino: str | Path | None = None,
         momento_execucao: datetime | None = None,
     ) -> Path:
-        """
-        Cria a planilha Excel de controle de execução com cabeçalho formatado e registros.
-        """
-        dt = momento_execucao or datetime.now()
+        """Gera a planilha Excel formatada com o resultado dos envios."""
+        data_hora = momento_execucao or datetime.now()
         destino = Path(pasta_destino or settings.REDE_PASTA_RELATORIOS)
         destino.mkdir(parents=True, exist_ok=True)
+        caminho_final = destino / cls.gerar_nome_arquivo(data_hora)
 
-        nome_arquivo = cls.gerar_nome_arquivo(dt)
-        caminho_final = destino / nome_arquivo
+        planilha = openpyxl.Workbook()
+        aba = planilha.active
+        aba.title = "Relatório de Execução"
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Relatório de Execução"
-
-        # Título / Cabeçalho da tabela
-        headers = [
-            "Data Execução",
-            "Matrícula",
-            "Colaborador",
-            "Email",
-            "Status",
-            "MotivoErro",
-        ]
-
-        # Estilos
-        header_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
-        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        thin_border = Border(
+        preenchimento_cabecalho = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
+        fonte_cabecalho = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        borda_fina = Border(
             left=Side(style="thin", color="CCCCCC"),
             right=Side(style="thin", color="CCCCCC"),
             top=Side(style="thin", color="CCCCCC"),
             bottom=Side(style="thin", color="CCCCCC"),
         )
-        align_center = Alignment(horizontal="center", vertical="center")
-        align_left = Alignment(horizontal="left", vertical="center")
+        alinhamento_centro = Alignment(horizontal="center", vertical="center")
+        alinhamento_esquerda = Alignment(horizontal="left", vertical="center")
 
-        ws.append(headers)
+        aba.append(CABECALHOS_RELATORIO)
+        for indice_coluna in range(1, len(CABECALHOS_RELATORIO) + 1):
+            celula = aba.cell(row=1, column=indice_coluna)
+            celula.fill = preenchimento_cabecalho
+            celula.font = fonte_cabecalho
+            celula.alignment = alinhamento_centro
 
-        for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = align_center
+        for registro in registros:
+            status_texto = registro.status.value if hasattr(registro.status, "value") else str(registro.status)
+            aba.append([
+                registro.data_execucao,
+                registro.matricula,
+                registro.colaborador,
+                registro.email,
+                status_texto,
+                registro.motivo_erro or "",
+            ])
+            linha_atual = aba.max_row
+            for indice_coluna in range(1, len(CABECALHOS_RELATORIO) + 1):
+                celula = aba.cell(row=linha_atual, column=indice_coluna)
+                celula.border = borda_fina
+                celula.alignment = alinhamento_centro if indice_coluna in (1, 2, 5) else alinhamento_esquerda
 
-        # Preenchimento das linhas
-        for reg in registros:
-            row_data = [
-                reg.data_execucao,
-                reg.matricula,
-                reg.colaborador,
-                reg.email,
-                reg.status.value if hasattr(reg.status, "value") else str(reg.status),
-                reg.motivo_erro or "",
-            ]
-            ws.append(row_data)
-            current_row = ws.max_row
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=current_row, column=col_idx)
-                cell.border = thin_border
-                cell.alignment = align_center if col_idx in [1, 2, 5] else align_left
+        for coluna in aba.columns:
+            largura_maxima = max(len(str(celula.value or "")) for celula in coluna)
+            letra_coluna = coluna[0].column_letter
+            aba.column_dimensions[letra_coluna].width = max(largura_maxima + 4, 14)
 
-        # Ajuste de largura automática das colunas
-        for col in ws.columns:
-            max_len = max(len(str(cell.value or "")) for cell in col)
-            col_letter = col[0].column_letter
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
-
-        wb.save(caminho_final)
-        logger.info(f"Relatório de execução salvo com sucesso em: {caminho_final}")
+        planilha.save(caminho_final)
+        logger.info(f"Relatório de execução salvo em: {caminho_final}")
         return caminho_final
-

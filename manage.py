@@ -1014,36 +1014,29 @@ def automate_play(
 
 
 
-# ── Senior Automation Commands ─────────────────────────────
+
 def _disparar_senior(ambiente: str = "producao") -> bool:
-    """
-    Dispara o executável Iniciar.exe do Senior diretamente com argumentos de módulo,
-    sem abrir pastas ou janelas do Explorer na frente.
-    """
+    """Dispara o executável do Senior diretamente na rede ou via fallback local."""
     import subprocess
     from pathlib import Path
 
-# Inicia diretamente sem fechar nenhuma janela do sistema
-
-    # Disparo direto do executável Iniciar.exe na rede com argumentos do módulo Ronda
-    is_hml = "homolog" in ambiente.lower()
-    srv_dir = "Senior_HML" if is_hml else "Senior"
-    srv_host = "SRVVETORH-HML" if is_hml else "SRVVETORH"
-    senior_dir = r"C:\Senior-hml" if is_hml else r"C:\Senior"
-    exe_unc = f"\\\\{srv_host}\\\\{srv_dir}\\Iniciar.exe"
-    args = f'-SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\\"'
+    eh_homologacao = "homolog" in ambiente.lower()
+    pasta_servidor = "Senior_HML" if eh_homologacao else "Senior"
+    servidor_host = "SRVVETORH-HML" if eh_homologacao else "SRVVETORH"
+    diretorio_senior = r"C:\Senior-hml" if eh_homologacao else r"C:\Senior"
+    executavel_rede = f"\\\\{servidor_host}\\{pasta_servidor}\\Iniciar.exe"
+    argumentos = f'-SystemModule:VETORH.RONDA -seniordir:"{diretorio_senior}\\"'
 
     try:
-        subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
+        subprocess.Popen(f'"{executavel_rede}" {argumentos}', shell=True)
         return True
     except Exception:
         pass
 
-    # Fallback para executável local se disponível
-    exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
-    if exe_local.exists():
+    executavel_local = Path(diretorio_senior) / "Vetorh" / "RONDA.EXE"
+    if executavel_local.exists():
         try:
-            subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
+            subprocess.Popen([str(executavel_local)], cwd=str(executavel_local.parent))
             return True
         except Exception:
             pass
@@ -1051,11 +1044,133 @@ def _disparar_senior(ambiente: str = "producao") -> bool:
     return False
 
 
-def _val(param, default=None):
-    """Extrai valor real se o parâmetro for typer.models.OptionInfo (chamada Python direta)."""
-    if hasattr(param, "default"):
-        return param.default
-    return param if param is not None else default
+def _val(parametro, padrao=None):
+    """Extrai o valor real quando a função CLI é chamada diretamente em Python."""
+    if hasattr(parametro, "default"):
+        return parametro.default
+    return parametro if parametro is not None else padrao
+
+
+def _resolver_template_ambiente(nome_arquivo: str, ambiente: str) -> Path:
+    """Resolve o caminho do template priorizando a pasta do ambiente."""
+    from pathlib import Path
+
+    ambiente_limpo = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    raiz_templates = Path("assets/templates")
+    caminho_ambiente = raiz_templates / ambiente_limpo / nome_arquivo
+    if caminho_ambiente.exists():
+        return caminho_ambiente
+    return raiz_templates / nome_arquivo
+
+
+def _clicar_template_com_auditoria(
+    nome_template: str,
+    ambiente: str,
+    timeout: int,
+    confidence: float,
+    arquivo_erro: str,
+    arquivo_sucesso: str,
+) -> None:
+    """Localiza e clica em um template visual salvando prints em caso de sucesso ou falha."""
+    import time
+    from pathlib import Path
+    from infrastructure.automation import gui
+
+    ambiente_limpo = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    pasta_prints = Path(f"assets/prints/{ambiente_limpo}")
+    pasta_prints.mkdir(parents=True, exist_ok=True)
+
+    caminho_template = _resolver_template_ambiente(nome_template, ambiente)
+    if not caminho_template.exists():
+        _err(f"Template visual '{nome_template}' não encontrado.")
+        raise typer.Exit(1)
+
+    _info(f"Localizando '{nome_template}' na tela (timeout: {timeout}s)...")
+    posicao = gui.wait_for(str(caminho_template), timeout=float(timeout), confidence=confidence)
+    if not posicao:
+        try:
+            gui.screenshot(save_to=str(pasta_prints / arquivo_erro))
+        except Exception:
+            pass
+        _err(f"Elemento '{nome_template}' não encontrado na tela.")
+        raise typer.Exit(1)
+
+    _ok(f"Elemento '{nome_template}' encontrado em {posicao}. Clicando...")
+    gui.click(posicao[0], posicao[1])
+    time.sleep(1)
+
+    try:
+        gui.screenshot(save_to=str(pasta_prints / arquivo_sucesso))
+    except Exception:
+        pass
+
+
+def _processar_disparo_emails_lote(
+    colaboradores: list,
+    obter_pdf_por_matricula,
+    pasta_relatorios: Path,
+    modo: str,
+) -> tuple[int, int]:
+    """Executa o envio de e-mails para a lista de colaboradores e gera a planilha de controle."""
+    from datetime import datetime
+    from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
+    from services.email_service import EmailService
+    from services.relatorio_service import RelatorioService
+
+    total_envios = 0
+    total_erros = 0
+    registros_execucao = []
+    momento_execucao = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    for colaborador in colaboradores:
+        caminho_pdf = obter_pdf_por_matricula(colaborador.matricula)
+        registro = RegistroExecucaoColaborador(
+            data_execucao=momento_execucao,
+            matricula=colaborador.matricula,
+            colaborador=colaborador.nome,
+            email=colaborador.email,
+            status=StatusExecucao.PENDENTE,
+            motivo_erro="",
+        )
+
+        if not caminho_pdf or not Path(caminho_pdf).exists():
+            registro.status = StatusExecucao.ERRO
+            registro.motivo_erro = f"Cartão individual {colaborador.matricula}.pdf não encontrado."
+            total_erros += 1
+            registros_execucao.append(registro)
+            _warn(f"Cartão do colaborador {colaborador.nome} (Código: {colaborador.matricula}) não encontrado.")
+            continue
+
+        try:
+            EmailService.enviar_cartao_ponto(
+                destinatario_email=colaborador.email,
+                nome_colaborador=colaborador.nome,
+                caminho_pdf_anexo=caminho_pdf,
+                modo=modo,
+            )
+            registro.status = StatusExecucao.SUCESSO
+            total_envios += 1
+            _ok(f"E-mail enviado para: {colaborador.nome} <{colaborador.email}> | Anexo: {Path(caminho_pdf).name}")
+        except Exception as erro_envio:
+            registro.status = StatusExecucao.ERRO
+            registro.motivo_erro = str(erro_envio)
+            total_erros += 1
+            _err(f"Falha ao enviar e-mail para {colaborador.nome}: {erro_envio}")
+
+        registros_execucao.append(registro)
+
+    try:
+        pasta_relatorios.mkdir(parents=True, exist_ok=True)
+        caminho_relatorio = RelatorioService().gerar_relatorio_execucao(
+            registros=registros_execucao,
+            pasta_destino=pasta_relatorios,
+            momento_execucao=datetime.now(),
+        )
+        _ok(f"Relatório de Controle gerado: {caminho_relatorio}")
+    except Exception as erro_relatorio:
+        _warn(f"Aviso ao gerar relatório de controle: {erro_relatorio}")
+
+    return total_envios, total_erros
 
 
 @app.command("senior-open")
@@ -1083,6 +1198,7 @@ def senior_login(
 ):
     """Realiza o login no sistema Senior por imagem (OpenCV + PyAutoGUI)."""
     import time
+    import pyperclip
     from pathlib import Path
     from core.config import settings
     from infrastructure.automation import gui
@@ -1104,140 +1220,100 @@ def senior_login(
                 time.sleep(1)
                 gui.focar_senior_geral()
         else:
-            _warn("Aviso: não foi possível abrir pelo atalho. Prosseguindo para detecção visual...")
+            _warn("Não foi possível abrir pelo atalho. Prosseguindo para detecção visual...")
     else:
-        _info("Trazendo janela do Senior para primeiro plano...")
         gui.focar_senior_geral()
 
-    user = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
-    pwd = senha or settings.SENIOR_PASSWORD
-    if not user:
+    usuario_final = (usuario or settings.SENIOR_LOGIN or "").strip().lower()
+    senha_final = senha or settings.SENIOR_PASSWORD
+    if not usuario_final:
         _err("Usuário não configurado! Passe --user ou defina SENIOR_LOGIN no .env")
         raise typer.Exit(1)
 
-    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
-    templates_dir = Path("assets/templates")
-    prints_dir = Path(f"assets/prints/{amb_clean}")
-    prints_dir.mkdir(parents=True, exist_ok=True)
+    ambiente_limpo = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    pasta_prints = Path(f"assets/prints/{ambiente_limpo}")
+    pasta_prints.mkdir(parents=True, exist_ok=True)
 
-    # 1. Busca primeiro na pasta específica do ambiente (ex: assets/templates/homologacao/)
-    tpl_btn = templates_dir / amb_clean / "botao_autenticar.png"
-    # 2. Se não encontrar, tenta na raiz (assets/templates/)
-    if not tpl_btn.exists():
-        tpl_btn = templates_dir / "botao_autenticar.png"
-
-    if not tpl_btn.exists():
-        _err(f"Template visual 'botao_autenticar.png' não encontrado em '{templates_dir / amb_clean}' nem em '{templates_dir}'.")
+    template_autenticar = _resolver_template_ambiente("botao_autenticar.png", ambiente)
+    if not template_autenticar.exists():
+        _err("Template visual 'botao_autenticar.png' não encontrado.")
         raise typer.Exit(1)
 
-    # Em Homologação: se a tela de seleção de módulo estiver visível, clica no ícone do módulo
-    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
-    if not tpl_modulo.exists():
-        tpl_modulo = templates_dir / "icone_modulo.png"
-
-    if tpl_modulo.exists():
-        pos_mod = gui.wait_for(str(tpl_modulo), timeout=4, confidence=0.75)
-        if pos_mod:
-            _ok(f"Ícone de módulo do Senior (HML) detectado em {pos_mod}. Clicando...")
-            gui.click(pos_mod[0], pos_mod[1])
+    template_modulo = _resolver_template_ambiente("icone_modulo.png", ambiente)
+    if template_modulo.exists():
+        posicao_modulo = gui.wait_for(str(template_modulo), timeout=4, confidence=0.75)
+        if posicao_modulo:
+            gui.click(posicao_modulo[0], posicao_modulo[1])
             time.sleep(2)
 
-    _info(f"Localizando tela de autenticação por imagem (timeout: {timeout}s / 1 minuto)...")
-    pos_btn = None
+    _info(f"Localizando tela de autenticação (timeout: {timeout}s)...")
+    posicao_botao = None
     inicio_login = time.time()
     while time.time() - inicio_login < float(timeout):
-        pos_btn = gui.locate_center_on_screen(str(tpl_btn), confidence=confidence)
-        if pos_btn:
+        posicao_botao = gui.locate_center_on_screen(str(template_autenticar), confidence=confidence)
+        if posicao_botao:
             break
         gui.focar_senior_geral()
         time.sleep(1.2)
 
-    if not pos_btn:
-        screenshot_fail = prints_dir / "erro_login_nao_encontrado.png"
+    if not posicao_botao:
         try:
-            gui.screenshot(save_to=str(screenshot_fail))
-            _warn(f"Tela de login não encontrada. Print de auditoria salvo em: {screenshot_fail}")
+            gui.screenshot(save_to=str(pasta_prints / "erro_login_nao_encontrado.png"))
         except Exception:
             pass
-        _err(f"Botão 'Autenticar' não encontrado na tela após {timeout}s.")
-        _info("Dica: Certifique-se de que a janela do Senior está aberta e não minimizada.")
+        _err(f"Botão 'Autenticar' não encontrado após {timeout}s.")
         raise typer.Exit(1)
 
-    _ok(f"Botão 'Autenticar' detectado com sucesso em: {pos_btn}")
-
-    # Ancoragem visual: O campo de usuário fica ~55px acima do botão azul
-    x_user = pos_btn[0]
-    y_user = pos_btn[1] - 93
-    _info(f"Clicando no campo de Login em ({x_user}, {y_user})...")
-    gui.click(x_user, y_user)
+    # Campo de usuário fica 93px acima do botão Autenticar em 1080p;
+    # pyperclip evita perda de maiúsculas durante digitação em sessões RDP.
+    gui.click(posicao_botao[0], posicao_botao[1] - 93)
     time.sleep(0.3)
-
     gui.hotkey("ctrl", "a")
     gui.press("backspace")
-    import pyperclip
-    pyperclip.copy(user.lower())
+    pyperclip.copy(usuario_final)
     gui.hotkey("ctrl", "v")
-    _ok(f"Usuário '{user}' inserido.")
+    _ok(f"Usuário '{usuario_final}' inserido.")
 
     gui.press("tab")
     time.sleep(0.3)
     gui.hotkey("ctrl", "a")
     gui.press("backspace")
-    pyperclip.copy(pwd)
+    pyperclip.copy(senha_final)
     gui.hotkey("ctrl", "v")
     time.sleep(0.2)
     pyperclip.copy("")
     _ok("Senha inserida.")
 
     time.sleep(0.5)
-    _info("Clicando no botão 'Autenticar'...")
-    gui.click(pos_btn[0], pos_btn[1])
+    gui.click(posicao_botao[0], posicao_botao[1])
     time.sleep(1)
 
-    _info("Aguardando autenticação e carregamento do sistema Senior...")
-    login_fechou = False
-    for i in range(30):
+    _info("Aguardando carregamento do sistema Senior...")
+    for indice in range(30):
         time.sleep(1)
-        # Se o botão autenticar sumiu da tela, significa que o login foi submetido
-        if not gui.locate_on_screen(str(tpl_btn), confidence=0.65):
-            login_fechou = True
-            _ok(f"Autenticação aceita! Tela de login finalizada em ~{i+1}s.")
+        if not gui.locate_on_screen(str(template_autenticar), confidence=0.65):
+            _ok(f"Autenticação aceita em ~{indice + 1}s.")
             break
-
-    if not login_fechou:
-        _warn("Aviso: Tela de login ainda presente após 30s. Verifique se usuário/senha estão corretos.")
+    else:
+        _warn("Tela de login ainda presente após 30s. Verifique as credenciais.")
 
     time.sleep(2)
-    # Passo 1.5: Clica no ícone das 3 pessoas (colaboradores) para abrir o módulo
-    tpl_modulo = templates_dir / amb_clean / "icone_modulo.png"
-    if not tpl_modulo.exists():
-        tpl_modulo = templates_dir / "icone_modulo.png"
-
-    if tpl_modulo.exists():
-        _info("Aguardando ícone do módulo (3 colaboradores) na tela principal pós-login...")
-        pos_mod = None
-        for seg in range(1, 16):
+    if template_modulo.exists():
+        for _ in range(15):
             gui.focar_senior_geral()
-            pos_mod = gui.locate_center_on_screen(str(tpl_modulo), confidence=0.68)
-            if pos_mod:
-                _ok(f"Ícone de módulo detectado em {pos_mod}! Clicando para abrir o módulo...")
-                gui.click(pos_mod[0], pos_mod[1])
+            posicao_modulo = gui.locate_center_on_screen(str(template_modulo), confidence=0.68)
+            if posicao_modulo:
+                gui.click(posicao_modulo[0], posicao_modulo[1])
                 time.sleep(3)
                 break
             time.sleep(1)
 
-        if not pos_mod:
-            _info("Ícone de módulo não visto nos 15s iniciais; verificando menus...")
-
     time.sleep(2)
-    print_sucesso = prints_dir / "02_apos_login.png"
     try:
-        gui.screenshot(save_to=str(print_sucesso))
-        _ok(f"Print pós-login salvo em: {print_sucesso}")
+        gui.screenshot(save_to=str(pasta_prints / "02_apos_login.png"))
     except Exception:
         pass
-
-    _ok("Fluxo de login e abertura do módulo executados com sucesso!")
+    _ok("Login e abertura do módulo executados com sucesso!")
 
 
 @app.command("senior-calculos")
@@ -1246,48 +1322,16 @@ def senior_calculos(
     timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout para localizar a aba Cálculos"),
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Confiança da detecção visual"),
 ):
-    """Localiza e clica na aba/menu 'Cálculos' do Senior Desktop."""
-    import time
-    from pathlib import Path
-    from infrastructure.automation import gui
-
+    """Localiza e clica na aba 'Cálculos' do Senior Desktop."""
     _sec(f"Navegação Senior: Menu Cálculos ({ambiente})")
-    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
-    templates_dir = Path("assets/templates")
-    prints_dir = Path(f"assets/prints/{amb_clean}")
-    prints_dir.mkdir(parents=True, exist_ok=True)
-
-    tpl_calc = templates_dir / amb_clean / "menu_calculos.png"
-    if not tpl_calc.exists():
-        tpl_calc = templates_dir / "menu_calculos.png"
-
-    if not tpl_calc.exists():
-        _err(f"Template visual 'menu_calculos.png' não encontrado.")
-        raise typer.Exit(1)
-
-    _info(f"Localizando menu 'Cálculos' na tela (timeout: {timeout}s)...")
-    pos = gui.wait_for(str(tpl_calc), timeout=float(timeout), confidence=confidence)
-    if not pos:
-        screenshot_fail = prints_dir / "erro_menu_calculos_nao_encontrado.png"
-        try:
-            gui.screenshot(save_to=str(screenshot_fail))
-            _warn(f"Menu Cálculos não encontrado. Print salvo em: {screenshot_fail}")
-        except Exception:
-            pass
-        _err("Menu 'Cálculos' não encontrado na tela. Certifique-se de que o Senior está logado e aberto.")
-        raise typer.Exit(1)
-
-    _ok(f"Menu 'Cálculos' encontrado em {pos}. Clicando...")
-    gui.click(pos[0], pos[1])
-    time.sleep(1)
-
-    print_apos = prints_dir / "03_apos_clicar_calculos.png"
-    try:
-        gui.screenshot(save_to=str(print_apos))
-        _ok(f"Print após clicar em Cálculos salvo em: {print_apos}")
-    except Exception:
-        pass
-
+    _clicar_template_com_auditoria(
+        nome_template="menu_calculos.png",
+        ambiente=ambiente,
+        timeout=timeout,
+        confidence=confidence,
+        arquivo_erro="erro_menu_calculos_nao_encontrado.png",
+        arquivo_sucesso="03_apos_clicar_calculos.png",
+    )
     _ok("Clique no menu 'Cálculos' realizado com sucesso!")
 
 
@@ -1299,48 +1343,17 @@ def senior_click(
     confidence: float = typer.Option(0.75, "--confidence", "-c", help="Nível de confiança visual"),
 ):
     """Localiza e clica em qualquer template PNG cadastrado."""
-    import time
-    from pathlib import Path
-    from infrastructure.automation import gui
-
-    nome = template if template.endswith(".png") else f"{template}.png"
-    _sec(f"Senior Click: {nome} ({ambiente})")
-    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
-    templates_dir = Path("assets/templates")
-    prints_dir = Path(f"assets/prints/{amb_clean}")
-    prints_dir.mkdir(parents=True, exist_ok=True)
-
-    tpl = templates_dir / amb_clean / nome
-    if not tpl.exists():
-        tpl = templates_dir / nome
-
-    if not tpl.exists():
-        _err(f"Template visual '{nome}' não encontrado em '{templates_dir / amb_clean}' nem na raiz.")
-        raise typer.Exit(1)
-
-    _info(f"Localizando '{nome}' na tela (timeout: {timeout}s)...")
-    pos = gui.wait_for(str(tpl), timeout=float(timeout), confidence=confidence)
-    if not pos:
-        screenshot_fail = prints_dir / f"erro_{template}_nao_encontrado.png"
-        try:
-            gui.screenshot(save_to=str(screenshot_fail))
-            _warn(f"Elemento não encontrado. Print salvo em: {screenshot_fail}")
-        except Exception:
-            pass
-        _err(f"Elemento '{nome}' não encontrado na tela.")
-        raise typer.Exit(1)
-
-    _ok(f"Elemento '{nome}' encontrado em {pos}. Clicando...")
-    gui.click(pos[0], pos[1])
-    time.sleep(1)
-
-    print_apos = prints_dir / f"apos_clique_{template}.png"
-    try:
-        gui.screenshot(save_to=str(print_apos))
-        _ok(f"Print salvo em: {print_apos}")
-    except Exception:
-        pass
-    _ok(f"Clique em '{nome}' executado com sucesso!")
+    nome_arquivo = template if template.endswith(".png") else f"{template}.png"
+    _sec(f"Senior Click: {nome_arquivo} ({ambiente})")
+    _clicar_template_com_auditoria(
+        nome_template=nome_arquivo,
+        ambiente=ambiente,
+        timeout=timeout,
+        confidence=confidence,
+        arquivo_erro=f"erro_{template}_nao_encontrado.png",
+        arquivo_sucesso=f"apos_clique_{template}.png",
+    )
+    _ok(f"Clique em '{nome_arquivo}' executado com sucesso!")
 
 
 @app.command("senior-menu-cartao")
@@ -1349,67 +1362,56 @@ def senior_menu_cartao(
     timeout_passo: int = typer.Option(20, "--timeout", "-t", help="Timeout para cada clique de menu"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
 ):
-    """Executa a navegação completa dos menus com Self-Healing: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
+    """Navega pelos menus: Cálculos -> Apuração -> Listar -> Cartão Ponto."""
     import time
     from pathlib import Path
     from infrastructure.automation import gui
     from services.senior_service import SeniorService
 
     _sec(f"Navegação Senior: Menu Completo Cartão Ponto ({ambiente})")
-    amb_clean = "homologacao" if "homolog" in ambiente.lower() else "producao"
-    templates_dir = Path("assets/templates")
-    prints_dir = Path(f"assets/prints/{amb_clean}")
-    prints_dir.mkdir(parents=True, exist_ok=True)
+    ambiente_limpo = "homologacao" if "homolog" in ambiente.lower() else "producao"
+    pasta_prints = Path(f"assets/prints/{ambiente_limpo}")
+    pasta_prints.mkdir(parents=True, exist_ok=True)
 
-    service = SeniorService(ambiente=ambiente)
-    service.confidence = confidence
+    servico = SeniorService(ambiente=ambiente)
+    servico.confidence = confidence
+    servico.garantir_menu_principal_pronto(timeout=float(timeout_passo))
 
-    # 1. Garante que a tela principal e os menus estão prontos e desobstruídos
-    _info("Garantindo estado pronto dos menus (Self-Healing ativo)...")
-    service.garantir_menu_principal_pronto(timeout=float(timeout_passo))
-
-    passos = [
+    etapas_menu = (
         ("menu_calculos.png", "Cálculos"),
         ("menu_apuracao.png", "Apuração"),
         ("menu_listar.png", "Listar"),
         ("menu_cartao_ponto.png", "Cartão Ponto"),
-    ]
+    )
 
-    for arquivo, desc in passos:
-        tpl = service._obter_template(arquivo)
-        if not tpl:
-            _err(f"Template visual '{arquivo}' não encontrado.")
+    for arquivo_tpl, descricao in etapas_menu:
+        caminho_template = servico._obter_template(arquivo_tpl)
+        if not caminho_template:
+            _err(f"Template visual '{arquivo_tpl}' não encontrado.")
             raise typer.Exit(1)
 
-        _info(f"Localizando menu '{desc}' ({arquivo})...")
-        pos = gui.wait_for(str(tpl), timeout=float(timeout_passo), confidence=confidence)
-        if not pos:
-            # Tenta auto-recuperação (foco, clique em módulo se reapareceu)
-            service.tratar_obstaculos_conhecidos()
-            pos = gui.wait_for(str(tpl), timeout=5.0, confidence=confidence)
+        posicao = gui.wait_for(str(caminho_template), timeout=float(timeout_passo), confidence=confidence)
+        if not posicao:
+            servico.tratar_obstaculos_conhecidos()
+            posicao = gui.wait_for(str(caminho_template), timeout=5.0, confidence=confidence)
 
-        if not pos:
-            screenshot_fail = prints_dir / f"erro_menu_{arquivo}"
+        if not posicao:
             try:
-                gui.screenshot(save_to=str(screenshot_fail))
-                _warn(f"Print de falha salvo em: {screenshot_fail}")
+                gui.screenshot(save_to=str(pasta_prints / f"erro_menu_{arquivo_tpl}"))
             except Exception:
                 pass
-            _err(f"Menu '{desc}' não encontrado na tela.")
+            _err(f"Menu '{descricao}' não encontrado na tela.")
             raise typer.Exit(1)
 
-        _ok(f"Menu '{desc}' encontrado em {pos}. Clicando...")
-        gui.click(pos[0], pos[1])
+        _ok(f"Menu '{descricao}' encontrado em {posicao}. Clicando...")
+        gui.click(posicao[0], posicao[1])
         time.sleep(0.35)
 
     time.sleep(2)
-    print_tela = prints_dir / "04_tela_relatorio_702.png"
     try:
-        gui.screenshot(save_to=str(print_tela))
-        _ok(f"Print da tela aberta (Passo 5) salvo em: {print_tela}")
+        gui.screenshot(save_to=str(pasta_prints / "04_tela_relatorio_702.png"))
     except Exception:
         pass
-
     _ok("Navegação completa até o Cartão Ponto realizada com sucesso!")
 
 
@@ -1418,16 +1420,15 @@ def senior_selecionar_702(
     ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
 ):
-    """Passo 5: Desce a rolagem na Seleção de Modelos, seleciona o 702 e clica em Executar."""
+    """Passo 5: Seleciona o modelo 702 ('UnimedVA - Cartão Ponto Portal')."""
     from services.senior_service import SeniorService
 
     ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 15)
-
     _sec(f"Passo 5: Seleção de Relatório 702 ({ambiente})")
-    service = SeniorService(ambiente=ambiente)
-    if service.selecionar_relatorio_702(timeout_janela=timeout):
-        _ok("Opção 702 selecionada e botão Executar clicado com sucesso!")
+    servico = SeniorService(ambiente=ambiente)
+    if servico.selecionar_relatorio_702(timeout_janela=timeout):
+        _ok("Opção 702 selecionada com sucesso!")
     else:
         _err("Falha ao selecionar o relatório 702.")
         raise typer.Exit(1)
@@ -1438,15 +1439,14 @@ def senior_selecionar_001(
     ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar a janela de Modelos"),
 ):
-    """Passo 5: Localiza na Seleção de Modelos a opção 001 ('Cartão Ponto Simples') e clica para executar."""
+    """Passo 5: Seleciona o modelo 001 ('Cartão Ponto Simples')."""
     from services.senior_service import SeniorService
 
     ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 15)
-
     _sec(f"Passo 5: Seleção de Relatório 001 ({ambiente})")
-    service = SeniorService(ambiente=ambiente)
-    if service.selecionar_relatorio_001(timeout_janela=timeout):
+    servico = SeniorService(ambiente=ambiente)
+    if servico.selecionar_relatorio_001(timeout_janela=timeout):
         _ok("Opção 001 ('Cartão Ponto Simples') selecionada com sucesso!")
     else:
         _err("Falha ao selecionar o relatório 001.")
@@ -1455,8 +1455,8 @@ def senior_selecionar_001(
 
 @app.command("senior-valores-entrada")
 def senior_valores_entrada(
-    data_inicial: str = typer.Option("", "--data-inicial", "-i", help="Data inicial dd/mm/aaaa (calculada pelo PDD se omitida)"),
-    data_final: str = typer.Option("", "--data-final", "-f", help="Data final dd/mm/aaaa (calculada pelo PDD se omitida)"),
+    data_inicial: str = typer.Option("", "--data-inicial", "-i", help="Data inicial dd/mm/aaaa"),
+    data_final: str = typer.Option("", "--data-final", "-f", help="Data final dd/mm/aaaa"),
     ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(15, "--timeout", "-t", help="Timeout para aguardar o modal"),
 ):
@@ -1469,14 +1469,13 @@ def senior_valores_entrada(
     timeout = _val(timeout, 15)
 
     _sec(f"Passo 6: Preenchimento de Valores de Entrada ({ambiente})")
-    service = SeniorService(ambiente=ambiente)
+    servico = SeniorService(ambiente=ambiente)
     if not data_inicial or not data_final:
-        data_inicial, data_final = service.calcular_periodo_pdd()
-    _info(f"Valores para preenchimento:")
-    _info(f"    • Data Inicial: {data_inicial}")
-    _info(f"    • Data Final:   {data_final}")
-    if service.preencher_datas_e_gerar(data_inicial=data_inicial, data_final=data_final, timeout_janela=timeout):
-        _ok(f"Passo 6 executado com sucesso: Data Inicial [{data_inicial}] e Data Final [{data_final}] preenchidas e botão Ok clicado!")
+        data_inicial, data_final = servico.calcular_periodo_pdd()
+
+    _info(f"Período: {data_inicial} até {data_final}")
+    if servico.preencher_datas_e_gerar(data_inicial=data_inicial, data_final=data_final, timeout_janela=timeout):
+        _ok("Passo 6 executado com sucesso!")
     else:
         _err("Falha ao preencher Valores de Entrada.")
         raise typer.Exit(1)
@@ -1484,29 +1483,28 @@ def senior_valores_entrada(
 
 @app.command("senior-aguardar-salvar")
 def senior_aguardar_salvar(
-    destino: str = typer.Option("", "--destino", "-d", help="Caminho do arquivo PDF destino (padrão: V:\\grp-aud-doc\\DIGITALY_CARTAO_PONTO)"),
+    destino: str = typer.Option("", "--destino", "-d", help="Caminho do PDF destino"),
     ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
-    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório (padrão: 600s / 10min)"),
+    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout em segundos para aguardar o relatório"),
     modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
-    """Passo 7: Aguarda a janela de visualização do relatório, clica no disquete e salva na rede."""
+    """Passo 7: Aguarda a visualização do relatório, clica no disquete e salva na rede."""
     from services.senior_service import SeniorService
 
     destino = _val(destino, "")
     ambiente = _val(ambiente, "producao")
     timeout = _val(timeout, 1200)
-    modelo_str = str(_val(modelo, "702")).strip().zfill(3)
-    enviar_emails = _val(enviar_emails, True)
+    modelo_codigo = str(_val(modelo, "702")).strip().zfill(3)
 
-    _sec(f"Passo 7: Aguardo e Salvamento do Relatório Modelo {modelo_str} ({ambiente})")
-    service = SeniorService(ambiente=ambiente)
-    caminho_final = service.aguardar_relatorio_e_salvar(
+    _sec(f"Passo 7: Aguardo e Salvamento do Relatório Modelo {modelo_codigo} ({ambiente})")
+    servico = SeniorService(ambiente=ambiente)
+    caminho_final = servico.aguardar_relatorio_e_salvar(
         caminho_destino_pdf=Path(destino) if destino else None,
         timeout_segundos=timeout,
-        modelo=modelo_str,
+        modelo=modelo_codigo,
     )
     if caminho_final:
-        _ok(f"Passo 7 executado com sucesso! Arquivo consolidado salvo em: {caminho_final}")
+        _ok(f"Arquivo consolidado salvo em: {caminho_final}")
     else:
         _err("Falha ao salvar relatório consolidado.")
         raise typer.Exit(1)
@@ -1522,9 +1520,14 @@ def senior_fluxo(
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
     selecionar_702: bool = typer.Option(True, "--selecionar-702/--sem-702", help="Executar o Passo 5 (Seleção do Modelo)"),
     modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
-    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs individuais"),
+    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs"),
 ):
-    """Executa o fluxo geral: Login + Navegação Cartão Ponto + Seleção do Modelo (702 ou 001)."""
+    """Executa o fluxo completo: Login -> Menus -> Modelo -> Datas -> Salvar PDF -> Fechar Senior -> Separar PDFs -> E-mails."""
+    import time
+    from services.colaboradores_service import ColaboradoresService
+    from services.pdf_splitter_service import PdfSplitterService
+    from services.senior_service import SeniorService
+
     usuario = _val(usuario, "")
     senha = _val(senha, "")
     abrir = _val(abrir, True)
@@ -1532,167 +1535,78 @@ def senior_fluxo(
     timeout = _val(timeout, 60)
     confidence = _val(confidence, 0.70)
     selecionar_702 = _val(selecionar_702, True)
-    modelo_str = str(_val(modelo, "702")).strip().zfill(3)
+    modelo_codigo = str(_val(modelo, "702")).strip().zfill(3)
+    enviar_emails = _val(enviar_emails, True)
 
-    _sec(f"Fluxo Geral Senior: Login + Navegação + Modelo {modelo_str} ({ambiente})")
-    
-    # 1. Executa o Login
-    _info("Etapa 1: Executando Login no Senior...")
-    senior_login(
-        usuario=usuario,
-        senha=senha,
-        abrir=abrir,
-        ambiente=ambiente,
-        timeout=timeout,
-        confidence=confidence,
-    )
+    _sec(f"Fluxo Geral Senior: Modelo {modelo_codigo} ({ambiente})")
 
-    # 2. Aguarda estabilização da tela pós-login
-    import time
-    _info("Aguardando estabilização dos menus pós-login...")
-    time.sleep(1.2)
+    servico = SeniorService(ambiente=ambiente)
+    try:
+        senior_login(
+            usuario=usuario,
+            senha=senha,
+            abrir=abrir,
+            ambiente=ambiente,
+            timeout=timeout,
+            confidence=confidence,
+        )
+        time.sleep(1.2)
+        senior_menu_cartao(ambiente=ambiente, timeout_passo=timeout, confidence=confidence)
 
-    # 3. Executa a Navegação de Menus (Passo 4)
-    _info("Etapa 2: Navegando pelos menus até Cartão Ponto...")
-    senior_menu_cartao(
-        ambiente=ambiente,
-        timeout_passo=timeout,
-        confidence=confidence,
-    )
+        if not selecionar_702:
+            _ok("Fluxo geral executado com sucesso!")
+            return
 
-    # 4. Executa a Seleção do Modelo (Passo 5: 702 ou 001)
-    from services.senior_service import SeniorService
-    srv = SeniorService(ambiente=ambiente)
-    if selecionar_702:
-        if modelo_str == "001":
-            _info("Etapa 3: Selecionando modelo 001 ('Cartão Ponto Simples') e Executar...")
-            ok_modelo = srv.selecionar_relatorio_001(timeout_janela=15)
-        else:
-            _info("Etapa 3: Selecionando modelo 702 ('UnimedVA - Cartão Ponto Portal') e Executar...")
-            ok_modelo = srv.selecionar_relatorio_702(timeout_janela=15)
+        selecionou = (
+            servico.selecionar_relatorio_001(timeout_janela=15)
+            if modelo_codigo == "001"
+            else servico.selecionar_relatorio_702(timeout_janela=15)
+        )
+        if not selecionou:
+            _warn(f"Não foi possível selecionar o modelo {modelo_codigo}.")
+            return
+        _ok(f"Modelo {modelo_codigo} selecionado!")
 
-        if ok_modelo:
-            _ok(f"Etapa 3 concluída com sucesso (Modelo {modelo_str} selecionado e Executar clicado)!")
-            
-            # 5. Executa o Preenchimento de Valores de Entrada (Passo 6 - Simulação Dia 04)
-            data_ini_calc, data_fim_calc = srv.calcular_periodo_pdd()
-            _info(f"Etapa 4: Preenchendo Valores de Entrada (20 do mês anterior a 19 do mês atual)...")
-            _info(f"Valores definidos para o período:")
-            _info(f"    • Data Inicial: {data_ini_calc}")
-            _info(f"    • Data Final:   {data_fim_calc}")
-            if srv.preencher_datas_e_gerar(data_inicial=data_ini_calc, data_final=data_fim_calc, timeout_janela=15):
-                _ok(f"Etapa 4 concluída! Valores preenchidos: Data Inicial [{data_ini_calc}] e Data Final [{data_fim_calc}] -> Botão Ok acionado!")
-                
-                # 6. Aguarda o relatório ser gerado e salva em V:\grp-aud-doc\DIGITALY_CARTAO_PONTO (Passo 7)
-                _info("Etapa 5: Aguardando relatório ser gerado e salvando na rede (Passo 7)...")
-                arq_salvo = srv.aguardar_relatorio_e_salvar(modelo=modelo_str)
-                if arq_salvo:
-                    _ok(f"Etapa 5 concluída com sucesso! Relatório consolidado salvo em: {arq_salvo}")
+        data_ini_calc, data_fim_calc = servico.calcular_periodo_pdd()
+        if not servico.preencher_datas_e_gerar(data_inicial=data_ini_calc, data_final=data_fim_calc, timeout_janela=15):
+            _warn("Não foi possível preencher os Valores de Entrada.")
+            return
+        _ok(f"Valores de Entrada preenchidos: {data_ini_calc} até {data_fim_calc}")
 
-                    # Fecha o Senior Desktop via PID imediatamente após salvar o PDF consolidado
-                    _info("Encerrando o Senior Desktop via PID (PDF consolidado já salvo)...")
-                    if srv.encerrar_senior():
-                        _ok("Senior Desktop encerrado com sucesso via PID. Prosseguindo com a separação de PDFs e e-mails...")
+        arquivo_salvo = servico.aguardar_relatorio_e_salvar(modelo=modelo_codigo)
+        if not arquivo_salvo:
+            _warn("Relatório consolidado não foi salvo automaticamente.")
+            return
+        _ok(f"Relatório consolidado salvo em: {arquivo_salvo}")
 
-                    # 7. Separação dos Cartões Individuais por Código de Empregado (Passo 8)
-                    from core.config import settings
-                    from services.pdf_splitter_service import PdfSplitterService
-                    
-                    # Salva estritamente dentro da subpasta 'individuais' da pasta da data do consolidado
-                    pasta_individuais_dia = arq_salvo.parent / "individuais"
-                    pasta_individuais_dia.mkdir(parents=True, exist_ok=True)
+        if servico.encerrar_senior():
+            _ok("Senior Desktop encerrado via PID após salvamento do PDF.")
 
-                    _info(f"Etapa 6: Separando cartões individuais em '{pasta_individuais_dia}' (Passo 8)...")
-                    mapa_individuais = PdfSplitterService.dividir_cartoes_ponto(
-                        caminho_consolidado=arq_salvo,
-                        pasta_destino=pasta_individuais_dia,
-                    )
-                    _ok(f"Etapa 6 concluída! {len(mapa_individuais)} cartões individuais gerados em: {pasta_individuais_dia}")
+        pasta_individuais = arquivo_salvo.parent / "individuais"
+        pasta_individuais.mkdir(parents=True, exist_ok=True)
+        mapa_individuais = PdfSplitterService.dividir_cartoes_ponto(
+            caminho_consolidado=arquivo_salvo,
+            pasta_destino=pasta_individuais,
+        )
+        _ok(f"{len(mapa_individuais)} cartões individuais gerados em: {pasta_individuais}")
 
-                    # 8. Identificação na Planilha e Disparo de E-mails (Passo 10)
-                    if not enviar_emails:
-                        _info("Etapa 7 ignorada: fluxo configurado para parar após separar os PDFs individuais (sem envio de e-mails).")
-                    else:
-                        _info("Etapa 7: Identificando colaboradores na planilha e enviando e-mails (Passo 10)...")
-                        from services.colaboradores_service import ColaboradoresService
-                        from services.email_service import EmailService
-                        from services.relatorio_service import RelatorioService
-                        from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
-                        from datetime import datetime
+        if not enviar_emails:
+            _info("Etapa 7 ignorada (--sem-emails): fluxo encerrado após separação dos PDFs.")
+            _ok("Fluxo geral executado com sucesso!")
+            return
 
-                        colaboradores = ColaboradoresService.carregar_colaboradores()
-                        total_envios = 0
-                        total_erros = 0
-                        registros_execucao = []
-                        agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
-                        for c in colaboradores:
-                            pdf_path = mapa_individuais.get(c.matricula)
-                            reg = RegistroExecucaoColaborador(
-                                data_execucao=agora_str,
-                                matricula=c.matricula,
-                                colaborador=c.nome,
-                                email=c.email,
-                                status=StatusExecucao.PENDENTE,
-                                motivo_erro="",
-                            )
-
-                            if not pdf_path or not Path(pdf_path).exists():
-                                reg.status = StatusExecucao.ERRO
-                                reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado."
-                                total_erros += 1
-                                registros_execucao.append(reg)
-                                continue
-
-                            try:
-                                EmailService.enviar_cartao_ponto(
-                                    destinatario_email=c.email,
-                                    nome_colaborador=c.nome,
-                                    caminho_pdf_anexo=pdf_path,
-                                    modo="04",
-                                )
-                                reg.status = StatusExecucao.SUCESSO
-                                total_envios += 1
-                                _ok(f"E-mail enviado para {c.nome} ({c.email}) | Anexo: {pdf_path.name}")
-                            except Exception as ex_mail:
-                                reg.status = StatusExecucao.ERRO
-                                reg.motivo_erro = str(ex_mail)
-                                total_erros += 1
-                                _warn(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
-
-                            registros_execucao.append(reg)
-
-                        # Gera o Relatório de Controle em Excel conforme PDD
-                        try:
-                            pasta_relatorios_dia = arq_salvo.parent / "relatorios"
-                            pasta_relatorios_dia.mkdir(parents=True, exist_ok=True)
-                            relatorio_path = RelatorioService().gerar_relatorio_execucao(
-                                registros=registros_execucao,
-                                pasta_destino=pasta_relatorios_dia,
-                                momento_execucao=datetime.now(),
-                            )
-                            _ok(f"Relatório de Execução gerado com sucesso em: {relatorio_path}")
-                        except Exception as ex_rel:
-                            _warn(f"Aviso ao gerar relatório de execução: {ex_rel}")
-
-                        _ok(f"Etapa 7 concluída! {total_envios} e-mails enviados com sucesso ({total_erros} erros).")
-                else:
-                    _warn("Aviso na Etapa 5: Relatório não foi salvo automaticamente.")
-            else:
-                _warn("Aviso na Etapa 4: Não foi possível preencher os Valores de Entrada.")
-        else:
-            _warn(f"Aviso na Etapa 3: Não foi possível selecionar automaticamente o modelo {modelo_str}.")
-
-    # Garantia final: encerra o Senior via PID caso ainda exista algum processo residual
-    if srv.obter_pids_senior():
-        _info("Encerrando processos residuais do Senior Desktop via PID...")
-        if srv.encerrar_senior():
-            _ok("Processos residuais do Senior encerrados com sucesso via PID.")
-
-    _ok("Fluxo geral executado com sucesso!")
-
-
-
+        colaboradores = ColaboradoresService.carregar_colaboradores()
+        total_envios, total_erros = _processar_disparo_emails_lote(
+            colaboradores=colaboradores,
+            obter_pdf_por_matricula=lambda matricula: mapa_individuais.get(matricula),
+            pasta_relatorios=arquivo_salvo.parent / "relatorios",
+            modo="04",
+        )
+        _ok(f"Etapa 7 concluída! {total_envios} e-mails enviados ({total_erros} erros).")
+        _ok("Fluxo geral executado com sucesso!")
+    finally:
+        if servico.obter_pids_senior():
+            servico.encerrar_senior()
 
 
 @app.command("senior-fluxo-001")
@@ -1703,7 +1617,7 @@ def senior_fluxo_001(
     ambiente: str = typer.Option("producao", "--ambiente", "-a", help="Ambiente: homologacao ou producao"),
     timeout: int = typer.Option(60, "--timeout", "-t", help="Timeout para aguardar telas e elementos"),
     confidence: float = typer.Option(0.70, "--confidence", "-c", help="Nível de confiança visual"),
-    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs individuais"),
+    enviar_emails: bool = typer.Option(True, "--enviar-emails/--sem-emails", help="Enviar os e-mails após separar os PDFs"),
 ):
     """Executa o fluxo completo ponta a ponta utilizando o Modelo 001 ('Cartão Ponto Simples')."""
     senior_fluxo(
@@ -1742,75 +1656,74 @@ def senior_extrair(
         enviar_emails=False,
     )
 
+
 @app.command("senior-fechar")
 def senior_fechar():
-    """Encerra com seguranca todos os processos ativos do Senior Desktop via PID."""
+    """Encerra com segurança todos os processos ativos do Senior Desktop via PID."""
     from services.senior_service import SeniorService
-    srv = SeniorService()
+
+    servico = SeniorService()
     _sec("Encerramento do Senior Desktop (via PID)")
-    pids = srv.obter_pids_senior()
+    pids = servico.obter_pids_senior()
     if not pids:
-        _warn("Nenhum processo ativo do Senior Desktop foi encontrado na maquina.")
+        _warn("Nenhum processo ativo do Senior Desktop foi encontrado na máquina.")
         return
-    _info(f"Processos do Senior localizados com PID(s): {pids}")
-    fechou = srv.encerrar_senior()
-    if fechou:
-        _ok(f"Processo(s) {pids} do Senior finalizado(s) com sucesso.")
+    _info(f"Processos localizados com PID(s): {pids}")
+    if servico.encerrar_senior():
+        _ok(f"Processo(s) {pids} finalizado(s) com sucesso.")
     else:
-        _err("Nao foi possivel finalizar os processos do Senior.")
+        _err("Não foi possível finalizar os processos do Senior.")
+
 
 @app.command("senior-separar-pdfs")
 def senior_separar_pdfs(
     consolidado: str = typer.Option("", "--consolidado", "-c", help="Caminho do arquivo consolidado PDF"),
     destino: str = typer.Option("", "--destino", "-d", help="Pasta de destino dos PDFs individuais"),
-    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout para aguardar o arquivo ser carregado e virar PDF"),
+    timeout: int = typer.Option(1200, "--timeout", "-t", help="Timeout para aguardar o arquivo estabilizar"),
     modelo: str = typer.Option("702", "--modelo", "-mod", help="Modelo do relatório: 702 ou 001"),
 ):
     """Passo 8: Divide o PDF consolidado em cartões individuais nomeados com o código do empregado."""
+    from datetime import datetime
+    from core.config import settings
     from services.pdf_splitter_service import PdfSplitterService
     from services.senior_service import SeniorService
-    from core.config import settings
-    from datetime import datetime
-    from pathlib import Path
 
     _sec("Passo 8: Separação de Cartões Individuais por Código")
     pasta_base = Path(settings.REDE_PASTA_CONSOLIDADO)
     data_hoje = datetime.now().strftime("%d%m%Y")
     pasta_dia = pasta_base / data_hoje
+    modelo_codigo = str(_val(modelo, "702")).strip().zfill(3)
 
     if consolidado:
         caminho_pdf = Path(consolidado)
     else:
-        # Busca prioritariamente na pasta com a data do dia (ex: V:\grp-aud-doc\DIGITALY_CARTAO_PONTO\08112026)
+        caminho_pdf = None
         if pasta_dia.exists():
-            _info(f"Monitorando pasta da data de hoje: {pasta_dia}...")
-            service = SeniorService()
-            caminho_pdf = service.aguardar_arquivo_pdf_estabilizado(
+            servico = SeniorService()
+            caminho_pdf = servico.aguardar_arquivo_pdf_estabilizado(
                 pasta=pasta_dia,
-                nome_esperado=f"HRCP{str(_val(modelo, '702')).strip().zfill(3)}_{data_hoje}.pdf",
+                nome_esperado=f"HRCP{modelo_codigo}_{data_hoje}.pdf",
                 timeout_segundos=timeout,
             )
-        else:
-            caminho_pdf = None
 
         if not caminho_pdf or not caminho_pdf.exists():
-            # Fallback: procura na pasta raiz
-            arquivos = sorted(pasta_base.glob("**/HRCP*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
-            if not arquivos:
+            arquivos_encontrados = sorted(
+                pasta_base.glob("**/HRCP*.pdf"),
+                key=lambda arquivo: arquivo.stat().st_mtime,
+                reverse=True,
+            )
+            if not arquivos_encontrados:
                 _err(f"Nenhum arquivo consolidado PDF encontrado em: {pasta_dia} ou {pasta_base}")
                 raise typer.Exit(1)
-            caminho_pdf = arquivos[0]
+            caminho_pdf = arquivos_encontrados[0]
 
-    pasta_dest = Path(destino) if destino else (caminho_pdf.parent / "individuais")
-    pasta_dest.mkdir(parents=True, exist_ok=True)
+    pasta_destino = Path(destino) if destino else (caminho_pdf.parent / "individuais")
+    pasta_destino.mkdir(parents=True, exist_ok=True)
 
-    _info(f"Processando arquivo consolidado: {caminho_pdf}")
-    _info(f"Destino dos individuais: {pasta_dest}")
-
-    mapa = PdfSplitterService.dividir_cartoes_ponto(caminho_pdf, pasta_dest)
-    _ok(f"Separação concluída com sucesso! Total de {len(mapa)} arquivos individuais gerados.")
-    for mat, p in list(mapa.items())[:5]:
-        _info(f" - Código {mat} -> {p.name}")
+    mapa_individuais = PdfSplitterService.dividir_cartoes_ponto(caminho_pdf, pasta_destino)
+    _ok(f"Separação concluída! Total de {len(mapa_individuais)} arquivos gerados em {pasta_destino}.")
+    for matricula_item, caminho_item in list(mapa_individuais.items())[:5]:
+        _info(f" - Código {matricula_item} -> {caminho_item.name}")
 
 
 @app.command("senior-enviar-emails")
@@ -1821,13 +1734,9 @@ def senior_enviar_emails(
     matricula: str = typer.Option("", "--matricula", "-mat", help="Filtra por matrícula específica para teste"),
 ):
     """Passo 10: Lê a planilha de colaboradores e envia os e-mails com os cartões individuais anexados."""
-    from services.colaboradores_service import ColaboradoresService
-    from services.email_service import EmailService
-    from services.relatorio_service import RelatorioService
-    from schemas.execucao import RegistroExecucaoColaborador, StatusExecucao
-    from core.config import settings
     from datetime import datetime
-    from pathlib import Path
+    from core.config import settings
+    from services.colaboradores_service import ColaboradoresService
 
     _sec(f"Passo 10: Disparo de E-mails aos Colaboradores (Modo Dia {modo})")
     data_hoje = datetime.now().strftime("%d%m%Y")
@@ -1844,85 +1753,37 @@ def senior_enviar_emails(
     if not pasta_indiv.exists() and Path("data/individuais").exists():
         pasta_indiv = Path("data/individuais")
 
-    pasta_rel = (pasta_dia / "relatorios") if pasta_dia.exists() else Path(settings.REDE_PASTA_RELATORIOS)
+    pasta_relatorios = (pasta_dia / "relatorios") if pasta_dia.exists() else Path(settings.REDE_PASTA_RELATORIOS)
     try:
-        pasta_rel.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        _warn(f"Pasta de rede inacessível ({pasta_rel}). Usando pasta local 'data/relatorios'...")
-        pasta_rel = Path("data/relatorios")
-        pasta_rel.mkdir(parents=True, exist_ok=True)
+        pasta_relatorios.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        _warn(f"Pasta de rede inacessível ({pasta_relatorios}). Usando 'data/relatorios'...")
+        pasta_relatorios = Path("data/relatorios")
+        pasta_relatorios.mkdir(parents=True, exist_ok=True)
 
-    arq_planilha = _val(planilha, "") or settings.PLANILHA_COLABORADORES_PATH
+    arquivo_planilha = _val(planilha, "") or settings.PLANILHA_COLABORADORES_PATH
+    colaboradores = ColaboradoresService.carregar_colaboradores(arquivo_planilha)
 
-    _info(f"Pasta de cartões individuais: {pasta_indiv}")
-    _info(f"Planilha de colaboradores: {arq_planilha}")
+    filtro_matricula = _val(matricula, "").strip()
+    if filtro_matricula:
+        colaboradores = [
+            colab for colab in colaboradores if str(colab.matricula).strip() == filtro_matricula
+        ]
+        _info(f"Filtro aplicado: '{filtro_matricula}' ({len(colaboradores)} colaborador).")
 
-    colaboradores = ColaboradoresService.carregar_colaboradores(arq_planilha)
-    mat_filtro = _val(matricula, "").strip()
-    if mat_filtro:
-        colaboradores = [c for c in colaboradores if str(c.matricula).strip() == mat_filtro]
-        _info(f"Filtro por matrícula aplicado: '{mat_filtro}' ({len(colaboradores)} colaborador encontrado).")
+    def _buscar_pdf_individual(codigo_matricula: str):
+        caminho_padrao = pasta_indiv / f"{codigo_matricula}.pdf"
+        if caminho_padrao.exists():
+            return caminho_padrao
+        caminho_alternativo = pasta_indiv / f"Cartao_Ponto_{codigo_matricula}.pdf"
+        return caminho_alternativo if caminho_alternativo.exists() else None
 
-    _info(f"Total de {len(colaboradores)} colaboradores selecionados para envio.")
-
-    total_envios = 0
-    total_erros = 0
-    registros_execucao = []
-    agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
-    for c in colaboradores:
-        pdf_path = pasta_indiv / f"{c.matricula}.pdf"
-        if not pdf_path.exists():
-            pdf_alt = pasta_indiv / f"Cartao_Ponto_{c.matricula}.pdf"
-            if pdf_alt.exists():
-                pdf_path = pdf_alt
-
-        reg = RegistroExecucaoColaborador(
-            data_execucao=agora_str,
-            matricula=c.matricula,
-            colaborador=c.nome,
-            email=c.email,
-            status=StatusExecucao.PENDENTE,
-            motivo_erro="",
-        )
-
-        if not pdf_path.exists():
-            reg.status = StatusExecucao.ERRO
-            reg.motivo_erro = f"Cartão individual {c.matricula}.pdf não encontrado na pasta."
-            total_erros += 1
-            registros_execucao.append(reg)
-            _warn(f"Cartão do colaborador {c.nome} (Código: {c.matricula}) não encontrado.")
-            continue
-
-        try:
-            EmailService.enviar_cartao_ponto(
-                destinatario_email=c.email,
-                nome_colaborador=c.nome,
-                caminho_pdf_anexo=pdf_path,
-                modo=modo,
-            )
-            reg.status = StatusExecucao.SUCESSO
-            total_envios += 1
-            _ok(f"E-mail enviado para: {c.nome} <{c.email}> | Anexo: {pdf_path.name}")
-        except Exception as ex_mail:
-            reg.status = StatusExecucao.ERRO
-            reg.motivo_erro = str(ex_mail)
-            total_erros += 1
-            _err(f"Falha ao enviar e-mail para {c.nome}: {ex_mail}")
-
-        registros_execucao.append(reg)
-
-    # Gera relatório de execução
-    try:
-        rel_path = RelatorioService().gerar_relatorio_execucao(
-            registros=registros_execucao,
-            pasta_destino=pasta_rel,
-            momento_execucao=datetime.now(),
-        )
-        _ok(f"Relatório de Controle gerado: {rel_path}")
-    except Exception as ex_rel:
-        _warn(f"Aviso ao gerar relatório de controle: {ex_rel}")
-
+    total_envios, total_erros = _processar_disparo_emails_lote(
+        colaboradores=colaboradores,
+        obter_pdf_por_matricula=_buscar_pdf_individual,
+        pasta_relatorios=pasta_relatorios,
+        modo=modo,
+    )
     _ok(f"Disparo concluído: {total_envios} e-mails enviados com sucesso ({total_erros} falhas).")
 
 
