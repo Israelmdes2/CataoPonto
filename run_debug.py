@@ -21,7 +21,7 @@ if __name__ == "__main__":
         usuario="",
         senha="",
         abrir=True,
-        ambiente="homologacao",
+        ambiente="producao",
         timeout=60,
         confidence=0.70,
         selecionar_702=True,

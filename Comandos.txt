@@ -3,6 +3,8 @@
 # - Fluxo completo usando o Modelo 001 ('Cartão Ponto Simples'):
 .venv\Scripts\python.exe manage.py senior-fluxo-001
 
+#EXECUTA MAS NÃO ENVIA E-MAIL
+.venv\Scripts\python.exe manage.py senior-extrair
 
 #TELA DE Datas
 .venv\Scripts\python.exe manage.py senior-valores-entrada
@@ -20,6 +22,9 @@
 702
 # FLUXO COMPLETO 
 .venv\Scripts\python.exe manage.py senior-fluxo
+
+#EXECUTA MAS NÃO ENVIA E-MAIL
+.venv\Scripts\python.exe manage.py senior-extrair --modelo 702
 
 #TELA DE Datas
 .venv\Scripts\python.exe manage.py senior-valores-entrada
