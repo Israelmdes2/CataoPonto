@@ -27,6 +27,7 @@ class SeniorService:
         self.templates_dir = Path(settings.SENIOR_TEMPLATES_DIR)
         self.confidence = settings.SENIOR_CONFIDENCE
         self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self.pid: Optional[int] = None
 
     @staticmethod
     def calcular_periodo_datas(
@@ -203,9 +204,14 @@ class SeniorService:
         args = f'-SystemModule:VETORH.RONDA -seniordir:"{senior_dir}\\"'
 
         try:
-            subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
+            proc = subprocess.Popen(f'"{exe_unc}" {args}', shell=True)
+            if proc and proc.pid:
+                self.pid = proc.pid
             time.sleep(6)
             self.focar_janela_senior()
+            pids = self.obter_pids_senior()
+            if pids:
+                logger.info(f"Senior iniciado e identificado com PID(s): {pids}")
             return True
         except Exception as e:
             logger.error(f"Erro ao disparar Senior via UNC: {e}")
@@ -213,14 +219,137 @@ class SeniorService:
         exe_local = Path(senior_dir) / "Vetorh" / "RONDA.EXE"
         if exe_local.exists():
             try:
-                subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
+                proc = subprocess.Popen([str(exe_local)], cwd=str(exe_local.parent))
+                if proc and proc.pid:
+                    self.pid = proc.pid
                 time.sleep(6)
                 self.focar_janela_senior()
+                pids = self.obter_pids_senior()
+                if pids:
+                    logger.info(f"Senior iniciado e identificado com PID(s): {pids}")
                 return True
             except Exception as e:
                 logger.error(f"Erro ao disparar Senior local: {e}")
 
         return False
+
+
+    def obter_pids_senior(self) -> set[int]:
+        """Localiza todos os PIDs de processos e janelas ativas pertencentes ao Senior/Ronda."""
+        import psutil
+        import ctypes
+        pids: set[int] = set()
+
+        if self.pid and psutil.pid_exists(self.pid):
+            pids.add(self.pid)
+
+        # 1. Busca por Janelas Abertas do Senior (via HWND -> PID)
+        try:
+            user32 = ctypes.windll.user32
+            termos_janela = [
+                "controle de ponto e refeitório",
+                "gestão de pessoas",
+                "vetorh",
+                "ronda",
+                "senior",
+                "seleção de modelos",
+                "modelos para execução",
+            ]
+
+            def enum_proc(hwnd, extra):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        tit = buff.value.lower()
+                        if any(t in tit for t in termos_janela):
+                            lpdw = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(lpdw))
+                            if lpdw.value:
+                                pids.add(lpdw.value)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            user32.EnumWindows(WNDENUMPROC(enum_proc), 0)
+        except Exception as e:
+            logger.debug(f"Aviso ao buscar PID por HWND: {e}")
+
+        # 2. Busca por Processos em Execução (psutil)
+        nomes_alvo = {"ronda.exe", "iniciar.exe", "rubi.exe", "cs.exe", "senior.exe"}
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+                try:
+                    name = (proc.info['name'] or '').lower()
+                    exe = (proc.info['exe'] or '').lower()
+                    cmdline = " ".join(proc.info.get('cmdline') or []).lower()
+
+                    if name in nomes_alvo:
+                        pids.add(proc.info['pid'])
+                    elif "senior" in exe and ("vetorh" in exe or "ronda" in exe):
+                        pids.add(proc.info['pid'])
+                    elif "senior-hml" in cmdline or "vetorh.ronda" in cmdline:
+                        pids.add(proc.info['pid'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            logger.debug(f"Aviso ao iterar processos psutil: {e}")
+
+        return pids
+
+    def encerrar_senior(self, pid: Optional[int] = None) -> bool:
+        """
+        Encerra com segurança o Senior Desktop via PID (processo pai e filhos).
+        """
+        import psutil
+        pids_alvo = set()
+        if pid:
+            pids_alvo.add(pid)
+        else:
+            pids_alvo = self.obter_pids_senior()
+
+        if not pids_alvo:
+            logger.info("Nenhum processo ativo do Senior identificado para encerramento.")
+            return False
+
+        logger.info(f"Encerrando Senior via PID(s): {pids_alvo}...")
+        encerrados = 0
+
+        for p_id in pids_alvo:
+            try:
+                if not psutil.pid_exists(p_id):
+                    continue
+                proc = psutil.Process(p_id)
+                logger.info(f"Finalizando processo PID {p_id} ({proc.name()})...")
+
+                # Encerra filhos primeiro
+                filhos = proc.children(recursive=True)
+                for f in filhos:
+                    try:
+                        f.terminate()
+                    except Exception:
+                        pass
+                proc.terminate()
+
+                # Aguarda até 3 segundos para fechamento gracioso
+                _, ainda_vivos = psutil.wait_procs([proc] + filhos, timeout=3.0)
+                for vivo in ainda_vivos:
+                    try:
+                        vivo.kill()
+                    except Exception:
+                        pass
+
+                encerrados += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # Fallback via taskkill nativo do Windows
+                try:
+                    subprocess.run(f"taskkill /PID {p_id} /T /F", shell=True, capture_output=True)
+                    encerrados += 1
+                except Exception:
+                    pass
+
+        self.pid = None
+        return encerrados > 0
 
     def autenticar_senior(self, usuario: Optional[str] = None, senha: Optional[str] = None) -> bool:
         """
@@ -302,21 +431,27 @@ class SeniorService:
 
         return True
 
-    def selecionar_relatorio_702(self, timeout_janela: int = 15) -> bool:
+    def _selecionar_modelo_relatorio(
+        self,
+        codigo: str,
+        descricao: str,
+        tpl_opcao_nome: str,
+        tpl_nome_modelo: str,
+        timeout_janela: int = 15,
+        direcao_scroll: str = "down",
+    ) -> bool:
         """
-        PASSO 5:
-        1. Aguardar a janela 'Seleção de Modelos para Execução';
-        2. Rolar a grade até encontrar estritamente o modelo 702 ('UnimedVA - Cartão Ponto Portal');
-        3. Clicar no NOME da opção 702 com alta precisão visual (sem falsos positivos);
-        4. Clicar no botão 'Executar'.
+        PASSO 5 (Genérico):
+        1. Aguarda a janela 'Seleção de Modelos para Execução';
+        2. Localiza a linha do modelo informado (rolando para baixo ou para cima);
+        3. Clica duas vezes com precisão no NOME da opção para abrir Valores de Entrada.
         """
-        logger.info("Iniciando Passo 5: Seleção de Modelos para Execução (Código 702)...")
+        logger.info(f"Iniciando Passo 5: Seleção de Modelos para Execução (Código {codigo})...")
 
-        # 1. Aguarda a janela abrir (identificada pelo botão Executar ou pelo Título)
         tpl_titulo = self._obter_template("titulo_selecao_modelos.png")
         tpl_exec = self._obter_template("botao_executar.png")
-        tpl_702_oficial = self._obter_template("opcao_702_oficial.png")
-        tpl_nome_oficial = self._obter_template("nome_702_oficial.png")
+        tpl_opcao = self._obter_template(tpl_opcao_nome)
+        tpl_nome = self._obter_template(tpl_nome_modelo)
 
         pos_exec = None
         if tpl_exec:
@@ -343,134 +478,111 @@ class SeniorService:
         y_trilho_barra = pos_exec[1] + 110
         y_seta_barra = pos_exec[1] + 165
 
-        def _buscar_702_estrito():
-            """Busca estritamente o template oficial com alta confiança (sem sensibilidade / sem falsos positivos)."""
-            for tpl in [tpl_702_oficial, tpl_nome_oficial]:
+        def _buscar_estrito():
+            for tpl in [tpl_opcao, tpl_nome]:
                 if not tpl:
                     continue
                 for conf in [0.88, 0.82]:
-                    p = gui.locate_center_on_screen(str(tpl), confidence=conf)
-                    if p:
-                        return p, tpl
+                    p_found = gui.locate_center_on_screen(str(tpl), confidence=conf)
+                    if p_found:
+                        return p_found, tpl
             return None, None
 
-        # 2. Clica no centro da grade para focar o controle
-        gui.click(x_grade, y_grade)
-        time.sleep(0.3)
+        logger.info(f"Verificando se opção {codigo} já está visível...")
+        pos_modelo, qual_tpl = _buscar_estrito()
 
-        # 3. Loop de rolagem multi-método (scroll do mouse + PageDown + clique no trilho da barra)
-        pos_702 = None
-        qual_tpl = None
+        if not pos_modelo:
+            gui.click(x_grade, y_grade)
+            time.sleep(0.3)
+            pos_modelo, qual_tpl = _buscar_estrito()
 
-        logger.info("Verificando se opção 702 já está visível ou descendo a grade...")
-        pos_702, qual_tpl = _buscar_702_estrito()
-
-        if not pos_702:
+        if not pos_modelo:
             for ciclo in range(25):
-                # Método 1: Roda o scroll do mouse para baixo sobre a grade
-                try:
-                    gui.scroll(-4)
-                except Exception:
-                    pass
-
-                # Método 2: Tecla PageDown e Seta para Baixo
-                try:
-                    gui.press("pagedown")
-                    gui.press("down")
-                except Exception:
-                    pass
-
-                # Método 3: Clique no trilho inferior da barra de rolagem e na seta física
-                try:
-                    gui.click(x_trilho_barra, y_trilho_barra)
-                    gui.click(x_trilho_barra, y_seta_barra)
-                except Exception:
-                    pass
+                if direcao_scroll == "up":
+                    try:
+                        gui.press("home")
+                        gui.scroll(5)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        gui.scroll(-4)
+                    except Exception:
+                        pass
+                    try:
+                        gui.press("pagedown")
+                        gui.press("down")
+                    except Exception:
+                        pass
+                    try:
+                        gui.click(x_trilho_barra, y_trilho_barra)
+                        gui.click(x_trilho_barra, y_seta_barra)
+                    except Exception:
+                        pass
 
                 time.sleep(0.12)
-                pos_702, qual_tpl = _buscar_702_estrito()
-                if pos_702:
-                    logger.info(f"Opção 702 localizada com sucesso no ciclo {ciclo + 1} em {pos_702}!")
+                pos_modelo, qual_tpl = _buscar_estrito()
+                if pos_modelo:
+                    logger.info(f"Opção {codigo} localizada com sucesso no ciclo {ciclo + 1} em {pos_modelo}!")
                     break
 
-        if not pos_702:
-            logger.warning("Opção 702 ('UnimedVA - Cartão Ponto Portal') NÃO encontrada após rolagem completa.")
+        if not pos_modelo:
+            logger.warning(f"Opção {codigo} ('{descricao}') NÃO encontrada após rolagem completa.")
             return False
 
-        # 4. Calcula o ponto exato do clique no NOME 'UnimedVA - Cartão Ponto Portal'
-        if qual_tpl and "opcao_702_oficial" in str(qual_tpl):
-            x_nome = pos_702[0] + 35
-            y_nome = pos_702[1]
+        if qual_tpl and tpl_opcao_nome in str(qual_tpl):
+            x_nome = pos_modelo[0] + 35
+            y_nome = pos_modelo[1]
         else:
-            x_nome = pos_702[0]
-            y_nome = pos_702[1]
+            x_nome = pos_modelo[0]
+            y_nome = pos_modelo[1]
 
-        logger.info(f"Clicando com precisão no NOME da opção 702 em ({x_nome}, {y_nome})...")
+        logger.info(f"Clicando com precisão no NOME da opção {codigo} em ({x_nome}, {y_nome})...")
         gui.click(x_nome, y_nome)
         time.sleep(0.3)
         gui.click(x_nome, y_nome)
         time.sleep(0.8)
 
-        # 5. Clica no botão Executar (Anulado / Comentado a pedido do usuário - o duplo clique na linha já aciona a execução)
-        # logger.info(f"Clicando no botão Executar em {pos_exec}...")
-        # gui.click(pos_exec[0], pos_exec[1])
-
-        # 6. Monitoramento da janela Pesquisa de registro (Comentado a pedido do usuário)
-        # logger.info("Aguardando pós-Executar (verificando se 'Pesquisa de registro' aparece por até 10s)...")
-        # tpl_pesq = self._obter_template("titulo_pesquisa_registro.png")
-        # inicio_pesq = time.time()
-        # while time.time() - inicio_pesq < 10:
-        #     if tpl_pesq:
-        #         pos_pesq = gui.locate_center_on_screen(str(tpl_pesq), confidence=0.75)
-        #         if pos_pesq:
-        #             logger.warning(f"Janela 'Pesquisa de registro' detectada em {pos_pesq}! Enviando ESC para fechar...")
-        #             gui.click(pos_pesq[0], pos_pesq[1])
-        #             time.sleep(0.3)
-        #             gui.press("esc")
-        #             time.sleep(1.0)
-        #             break
-        #     time.sleep(0.5)
-
-        logger.info("Passo 5 executado com sucesso!")
+        logger.info(f"Passo 5 (Código {codigo}) executado com sucesso!")
         return True
 
-    def calcular_periodo_pdd(self, dia_simulado: Optional[int] = 4) -> tuple[str, str]:
+    def selecionar_relatorio_702(self, timeout_janela: int = 15) -> bool:
+        """PASSO 5: Seleciona o modelo 702 ('UnimedVA - Cartão Ponto Portal')."""
+        return self._selecionar_modelo_relatorio(
+            codigo="702",
+            descricao="UnimedVA - Cartão Ponto Portal",
+            tpl_opcao_nome="opcao_702_oficial.png",
+            tpl_nome_modelo="nome_702_oficial.png",
+            timeout_janela=timeout_janela,
+            direcao_scroll="down",
+        )
+
+    def selecionar_relatorio_001(self, timeout_janela: int = 15) -> bool:
+        """PASSO 5: Seleciona o modelo 001 ('Cartão Ponto Simples')."""
+        return self._selecionar_modelo_relatorio(
+            codigo="001",
+            descricao="Cartão Ponto Simples",
+            tpl_opcao_nome="opcao_001_oficial.png",
+            tpl_nome_modelo="nome_001_oficial.png",
+            timeout_janela=timeout_janela,
+            direcao_scroll="up",
+        )
+
+    def calcular_periodo_pdd(self, dia_simulado: Optional[int] = None) -> tuple[str, str]:
         """
-        Calcula as datas inicial e final de apuração de acordo com a regra do PDD (Passo 6):
-        - Dia 20: Início dia 20 mês anterior | Fim dia 19 mês atual
-        - Dia 30: Início dia 20 mês anterior | Fim dia 19 mês atual
-        - Dia 04: Início dia 20 penúltimo mês | Fim dia 19 mês anterior
+        Calcula as datas inicial e final para o modal 'Valores de Entrada' (Passo 6):
+        Regra: Sempre dia 20 do mês anterior e dia 19 do mês atual.
         """
         from datetime import datetime
         from dateutil.relativedelta import relativedelta
 
-        # =========================================================================
-        # SIMULAÇÃO DE TESTE DO DIA 04 (PDD Passo 6)
-        # Para produção, comente dia_exec = dia_simulado e descomente dia_exec = agora.day
-        # =========================================================================
         agora = datetime.now()
-        dia_exec = dia_simulado if dia_simulado is not None else agora.day
-
-        if dia_exec == 4:
-            # Dia 04:
-            # Data Inicial: dia 20 do penúltimo mês (agora - 2 meses)
-            # Data Final: dia 19 do mês anterior (agora - 1 mês)
-            dt_ini = (agora - relativedelta(months=2)).replace(day=20)
-            dt_fim = (agora - relativedelta(months=1)).replace(day=19)
-        elif dia_exec in (20, 30):
-            # Dias 20 e 30:
-            # Data Inicial: dia 20 do mês anterior (agora - 1 mês)
-            # Data Final: dia 19 do mês atual
-            dt_ini = (agora - relativedelta(months=1)).replace(day=20)
-            dt_fim = agora.replace(day=19)
-        else:
-            # Fallback padrão: regra do dia 04
-            dt_ini = (agora - relativedelta(months=2)).replace(day=20)
-            dt_fim = (agora - relativedelta(months=1)).replace(day=19)
+        dt_ini = (agora - relativedelta(months=1)).replace(day=20)
+        dt_fim = agora.replace(day=19)
 
         str_ini = dt_ini.strftime("%d/%m/%Y")
         str_fim = dt_fim.strftime("%d/%m/%Y")
-        logger.info(f"Período de apuração calculado para o dia {dia_exec:02d}: {str_ini} até {str_fim}")
+        logger.info(f"Período de Valores de Entrada calculado (20 do mês anterior a 19 do mês atual): {str_ini} até {str_fim}")
         return str_ini, str_fim
 
     def fechar_janela_pesquisa_registro_se_aberta(self, timeout: int = 10) -> bool:
@@ -503,7 +615,7 @@ class SeniorService:
         5. Clicar no botão 'Ok'.
         """
         if not data_inicial or not data_final:
-            data_inicial, data_final = self.calcular_periodo_pdd(dia_simulado=4)
+            data_inicial, data_final = self.calcular_periodo_pdd()
 
         logger.info(f"Iniciando Passo 6: Preenchimento de Valores de Entrada ({data_inicial} até {data_final})...")
         print(f"\n  [>] Preenchimento de Valores de Entrada no Senior:")
@@ -520,6 +632,8 @@ class SeniorService:
         tpl_ok_limpo = self._obter_template("botao_ok_real_limpo.png")
         tpl_lbl_ini = self._obter_template("label_data_inicial.png")
         tpl_lbl_fim = self._obter_template("label_data_final.png")
+        tpl_lbl_ini_txt = self._obter_template("label_data_inicial_texto.png")
+        tpl_lbl_fim_txt = self._obter_template("label_data_final_texto.png")
         tpl_box_ini = self._obter_template("campo_data_inicial_box.png")
 
         pos_tela_identificada = None
@@ -584,22 +698,29 @@ class SeniorService:
 
         # 2. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA INICIAL'
         pos_campo_ini = None
-        if tpl_box_ini:
+        if tpl_lbl_ini_txt:
+            for c in [0.88, 0.78, 0.68]:
+                p_found = gui.locate_center_on_screen(str(tpl_lbl_ini_txt), confidence=c)
+                if p_found:
+                    pos_campo_ini = (p_found[0] + 45, p_found[1])
+                    break
+
+        if not pos_campo_ini and tpl_box_ini:
             for c in [0.85, 0.70]:
-                p = gui.locate_center_on_screen(str(tpl_box_ini), confidence=c)
-                if p:
-                    pos_campo_ini = (p[0] - 15, p[1])
+                p_found = gui.locate_center_on_screen(str(tpl_box_ini), confidence=c)
+                if p_found:
+                    pos_campo_ini = (p_found[0] - 15, p_found[1])
                     break
 
         if not pos_campo_ini and tpl_lbl_ini:
-            p = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=0.65)
-            if p:
-                pos_campo_ini = (p[0] + 80, p[1])
+            p_found = gui.locate_center_on_screen(str(tpl_lbl_ini), confidence=0.65)
+            if p_found:
+                pos_campo_ini = (p_found[0] + 80, p_found[1])
 
         if not pos_campo_ini and tpl_ok:
-            p = gui.locate_center_on_screen(str(tpl_ok), confidence=0.65)
-            if p:
-                pos_campo_ini = (p[0] - 635, p[1] + 20)
+            p_found = gui.locate_center_on_screen(str(tpl_ok), confidence=0.65)
+            if p_found:
+                pos_campo_ini = (p_found[0] - 635, p_found[1] + 20)
 
         if not pos_campo_ini:
             # Ancoragem a partir do título identificado
@@ -615,8 +736,19 @@ class SeniorService:
         time.sleep(0.5)
 
         # 3. LOCALIZAÇÃO E CLIQUE NO CAMPO 'DATA FINAL'
-        x_campo_fim = x_campo_ini
-        y_campo_fim = y_campo_ini + 26
+        pos_campo_fim = None
+        if tpl_lbl_fim_txt:
+            for c in [0.88, 0.78, 0.68]:
+                p_found = gui.locate_center_on_screen(str(tpl_lbl_fim_txt), confidence=c)
+                if p_found:
+                    pos_campo_fim = (p_found[0] + 45, p_found[1])
+                    break
+
+        if pos_campo_fim:
+            x_campo_fim, y_campo_fim = pos_campo_fim
+        else:
+            x_campo_fim = x_campo_ini
+            y_campo_fim = y_campo_ini + 27
         print(f"  [..] Clicando no campo 'Data Final' em ({x_campo_fim}, {y_campo_fim}) e digitando com intervalo de 0.5s...")
         logger.info(f"Clicando no campo Data Final em ({x_campo_fim}, {y_campo_fim})...")
         gui.click(x_campo_fim, y_campo_fim)
@@ -680,7 +812,7 @@ class SeniorService:
                 candidato = arquivo_alvo
             else:
                 # Procura outros arquivos .pdf gerados na pasta
-                candidatos_pdf = [f for f in pasta.glob("HRCP702*.pdf") if f.is_file() and f.stat().st_size > 0]
+                candidatos_pdf = [f for f in pasta.glob("HRCP*.pdf") if f.is_file() and f.stat().st_size > 0]
                 if candidatos_pdf:
                     candidatos_pdf.sort(key=lambda f: f.stat().st_mtime, reverse=True)
                     mais_recente = candidatos_pdf[0]
@@ -816,7 +948,7 @@ class SeniorService:
         logger.error("Falha ao alterar o campo Tipo para PDF após 3 tentativas.")
         return False
 
-    def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None) -> Optional[Path]:
+    def aguardar_relatorio_e_salvar(self, caminho_destino_pdf: Optional[Path] = None, timeout_segundos: Optional[int] = None, modelo: str = "702") -> Optional[Path]:
         """
         PASSO 7:
         Aguarda o relatório ser gerado pelo Senior, clica no ícone do disquete ('Salvar'),
@@ -842,7 +974,7 @@ class SeniorService:
         except Exception as e:
             logger.error(f"Erro ao criar pastas de rede em '{pasta_destino}': {e}")
 
-        nome_consolidado_padrao = f"HRCP702_{data_hoje_str}.pdf"
+        nome_consolidado_padrao = f"HRCP{modelo}_{data_hoje_str}.pdf"
         if caminho_destino_pdf:
             arquivo_final = Path(caminho_destino_pdf)
             arquivo_final.parent.mkdir(parents=True, exist_ok=True)
