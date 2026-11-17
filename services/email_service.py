@@ -2,33 +2,33 @@ import logging
 import re
 import smtplib
 import time
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 from pathlib import Path
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_EMAIL_REGEX = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-_CODIGOS_THROTTLING_TEMP = {421, 432, 451, 452}
+PADRAO_EMAIL = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+CODIGOS_THROTTLING_TEMPORARIO = {421, 432, 451, 452}
+MAX_TENTATIVAS_SMTP = 3
 
 
 class EmailService:
+    """Serviço responsável pelo envio de cartões de ponto via SMTP Microsoft 365."""
+
     _ultimo_envio_ts: float = 0.0
 
     @staticmethod
     def validar_formato_email(email: str) -> bool:
-        """Valida formato básico de e-mail antes de acionar o SMTP (evita error throttling na Microsoft)."""
-        return bool(email and _EMAIL_REGEX.match(email.strip()))
+        """Valida o formato do e-mail antes do SMTP para evitar error throttling na Microsoft."""
+        return bool(email and PADRAO_EMAIL.match(email.strip()))
 
     @classmethod
     def _aguardar_cadencia_microsoft(cls) -> None:
-        """
-        Garante o intervalo mínimo configurado (padrão 10s = máx 6 e-mails/min)
-        para permanecer bem abaixo do limite de 30 msg/min do Microsoft 365.
-        """
+        """Aplica o intervalo configurado para permanecer abaixo do limite de 30 msg/min do Exchange Online."""
         intervalo = float(getattr(settings, "EMAIL_INTERVALO_SEGUNDOS", 10.0) or 0.0)
         if intervalo <= 0 or cls._ultimo_envio_ts <= 0:
             return
@@ -36,16 +36,12 @@ class EmailService:
         decorrido = time.monotonic() - cls._ultimo_envio_ts
         restante = intervalo - decorrido
         if restante > 0:
-            logger.info(f"Aguardando {restante:.1f}s antes do próximo envio (cadência anti-bloqueio Microsoft 365)...")
+            logger.info(f"Aguardando {restante:.1f}s antes do próximo envio (cadência Microsoft 365).")
             time.sleep(restante)
 
     @staticmethod
     def obter_conteudo_email(nome_colaborador: str, modo: str) -> tuple[str, str]:
-        """
-        Gera o assunto e corpo do e-mail estritamente de acordo com as regras do PDD.
-        - Dias 20 e 04: Conferência das marcações
-        - Dia 30: Fechamento do período
-        """
+        """Retorna assunto e corpo do e-mail conforme o modo do PDD (conferência ou fechamento)."""
         if modo == "30":
             assunto = "Espelho de Ponto – Fechamento do Período"
             corpo = f"""Prezado(a) {nome_colaborador},
@@ -55,9 +51,10 @@ Segue o espelho de ponto finalizado.
 Atenciosamente,
 
 Departamento Pessoal"""
-        else:
-            assunto = "Espelho de Ponto – Conferência das Marcações"
-            corpo = f"""Prezado(a) {nome_colaborador},
+            return assunto, corpo
+
+        assunto = "Espelho de Ponto – Conferência das Marcações"
+        corpo = f"""Prezado(a) {nome_colaborador},
 
 Você está recebendo o espelho de ponto para conferência das marcações realizadas no período.
 Pedimos que confira os registros e, caso identifique alguma divergência ou necessidade de ajuste, solicite imediatamente a correção ao seu gestor, para que os ajustes sejam realizados dentro do prazo e não haja impacto no processamento da folha de pagamento.
@@ -69,8 +66,29 @@ Contamos com sua colaboração!
 Atenciosamente,
 
 Departamento Pessoal"""
-
         return assunto, corpo
+
+    @classmethod
+    def _montar_mensagem(
+        cls,
+        destinatario: str,
+        assunto: str,
+        corpo: str,
+        arquivo_anexo: Path,
+    ) -> MIMEMultipart:
+        """Constrói a mensagem MIME com o PDF individual anexado."""
+        mensagem = MIMEMultipart()
+        mensagem["From"] = settings.EMAIL_REMETENTE or settings.SMTP_USERNAME
+        mensagem["To"] = destinatario
+        mensagem["Subject"] = assunto
+        mensagem.attach(MIMEText(corpo, "plain", "utf-8"))
+
+        with open(arquivo_anexo, "rb") as arquivo:
+            anexo = MIMEApplication(arquivo.read(), Name=arquivo_anexo.name)
+            anexo["Content-Disposition"] = f'attachment; filename="{arquivo_anexo.name}"'
+            mensagem.attach(anexo)
+
+        return mensagem
 
     @classmethod
     def enviar_cartao_ponto(
@@ -80,86 +98,66 @@ Departamento Pessoal"""
         caminho_pdf_anexo: str | Path,
         modo: str,
     ) -> bool:
-        """
-        Envia o e-mail com o cartão ponto anexado para o colaborador,
-        respeitando cadência anti-bloqueio (10s) e retry seguro para throttling 4xx do Exchange Online.
-        """
+        """Envia o cartão de ponto em PDF para o colaborador com cadência e retry seguro."""
         arquivo_anexo = Path(caminho_pdf_anexo)
         if not arquivo_anexo.exists():
             raise FileNotFoundError(f"Arquivo anexo não encontrado: {arquivo_anexo}")
 
-        # Destinatário real ou teste
-        email_to = (destinatario_email or "").strip()
+        destinatario = (destinatario_email or "").strip()
         if settings.EMAIL_TESTE_MODO and settings.EMAIL_TESTE_DESTINO:
-            logger.info(f"[MODO TESTE] Redirecionando e-mail de {email_to} para {settings.EMAIL_TESTE_DESTINO}")
-            email_to = settings.EMAIL_TESTE_DESTINO.strip()
+            logger.info(f"[MODO TESTE] Redirecionando e-mail de {destinatario} para {settings.EMAIL_TESTE_DESTINO}")
+            destinatario = settings.EMAIL_TESTE_DESTINO.strip()
 
-        if not cls.validar_formato_email(email_to):
-            raise ValueError(f"Endereço de e-mail inválido na planilha (bloqueado antes do SMTP): '{email_to}'")
+        if not cls.validar_formato_email(destinatario):
+            raise ValueError(f"Endereço de e-mail inválido na planilha: '{destinatario}'")
 
         assunto, corpo = cls.obter_conteudo_email(nome_colaborador, modo)
+        mensagem = cls._montar_mensagem(destinatario, assunto, corpo, arquivo_anexo)
 
-        # Montagem da mensagem MIME
-        msg = MIMEMultipart()
-        msg["From"] = settings.EMAIL_REMETENTE or settings.SMTP_USERNAME
-        msg["To"] = email_to
-        msg["Subject"] = assunto
-
-        msg.attach(MIMEText(corpo, "plain", "utf-8"))
-
-        with open(arquivo_anexo, "rb") as f:
-            part = MIMEApplication(f.read(), Name=arquivo_anexo.name)
-            part["Content-Disposition"] = f'attachment; filename="{arquivo_anexo.name}"'
-            msg.attach(part)
-
-        # Se não houver senha SMTP configurada (ambiente de dev/mock), apenas simula com sucesso
         if not settings.SMTP_PASSWORD:
             logger.warning(
-                f"[SIMULAÇÃO] SMTP_PASSWORD não definido. E-mail para {email_to} simulado com sucesso. Anexo: {arquivo_anexo.name}"
+                f"[SIMULAÇÃO] SMTP_PASSWORD ausente. Envio para {destinatario} simulado ({arquivo_anexo.name})."
             )
             return True
 
-        # Aplica cadência configurada (ex: 10s entre envios) antes de conectar ao SMTP
         cls._aguardar_cadencia_microsoft()
 
-        # Envio real via SMTP com retry controlado apenas para throttling transitório (4xx)
-        max_tentativas = 3
-        for tentativa in range(1, max_tentativas + 1):
+        for tentativa in range(1, MAX_TENTATIVAS_SMTP + 1):
             try:
-                with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
-                    server.starttls()
-                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-                    server.send_message(msg)
+                with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as servidor:
+                    servidor.starttls()
+                    servidor.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                    servidor.send_message(mensagem)
                 cls._ultimo_envio_ts = time.monotonic()
-                logger.info(f"E-mail enviado com sucesso para {email_to} com anexo {arquivo_anexo.name}")
+                logger.info(f"E-mail enviado para {destinatario} com anexo {arquivo_anexo.name}")
                 return True
-            except smtplib.SMTPResponseException as smtp_ex:
+            except smtplib.SMTPResponseException as erro_smtp:
                 cls._ultimo_envio_ts = time.monotonic()
-                if smtp_ex.smtp_code in _CODIGOS_THROTTLING_TEMP and tentativa < max_tentativas:
+                # Apenas códigos 4xx transitórios justificam nova tentativa; 5xx falham imediatamente
+                if erro_smtp.smtp_code in CODIGOS_THROTTLING_TEMPORARIO and tentativa < MAX_TENTATIVAS_SMTP:
                     espera = 30 * tentativa
                     logger.warning(
-                        f"Throttling temporário Microsoft (código {smtp_ex.smtp_code}) ao enviar para {email_to}. "
-                        f"Aguardando {espera}s para tentativa {tentativa + 1}/{max_tentativas}..."
+                        f"Throttling Microsoft ({erro_smtp.smtp_code}) para {destinatario}. "
+                        f"Aguardando {espera}s para tentativa {tentativa + 1}/{MAX_TENTATIVAS_SMTP}."
                     )
                     time.sleep(espera)
                     continue
-                logger.error(f"Erro SMTP ({smtp_ex.smtp_code}) ao enviar e-mail para {email_to}: {smtp_ex}")
+                logger.error(f"Erro SMTP ({erro_smtp.smtp_code}) para {destinatario}: {erro_smtp}")
                 raise
-            except smtplib.SMTPServerDisconnected as disc_ex:
+            except smtplib.SMTPServerDisconnected as erro_desconexao:
                 cls._ultimo_envio_ts = time.monotonic()
-                if tentativa < max_tentativas:
+                if tentativa < MAX_TENTATIVAS_SMTP:
                     espera = 15 * tentativa
                     logger.warning(
-                        f"Conexão SMTP encerrada pelo servidor ao enviar para {email_to}. "
-                        f"Aguardando {espera}s para tentativa {tentativa + 1}/{max_tentativas}..."
+                        f"Desconexão SMTP para {destinatario}. Aguardando {espera}s ({tentativa + 1}/{MAX_TENTATIVAS_SMTP})."
                     )
                     time.sleep(espera)
                     continue
-                logger.error(f"Desconexão SMTP persistente ao enviar para {email_to}: {disc_ex}")
+                logger.error(f"Desconexão SMTP persistente para {destinatario}: {erro_desconexao}")
                 raise
-            except Exception as e:
+            except Exception as erro:
                 cls._ultimo_envio_ts = time.monotonic()
-                logger.error(f"Falha ao enviar e-mail para {email_to}: {e}")
+                logger.error(f"Falha ao enviar e-mail para {destinatario}: {erro}")
                 raise
 
         return False
